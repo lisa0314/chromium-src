@@ -216,7 +216,7 @@ modules_idl_files =
           "ml/execution.idl",
           "ml/ml.idl",
           "ml/model.idl",
-          "ml/neural_network.idl",
+          "ml/neural_network_context.idl",
           "netinfo/network_information.idl",
           "nfc/nfc.idl",
           "notifications/notification.idl",
