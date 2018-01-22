@@ -33,6 +33,8 @@
 #include "services/tracing/public/mojom/constants.mojom.h"
 #include "services/tracing/tracing_service.h"
 #include "services/video_capture/public/mojom/constants.mojom.h"
+#include "services/ml/public/interfaces/constants.mojom.h"
+#include "services/ml/ml_service.h"
 #include "services/video_capture/service_impl.h"
 #include "services/viz/public/interfaces/constants.mojom.h"
 #include "services/viz/service.h"
