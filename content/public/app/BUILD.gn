@@ -237,6 +237,7 @@ source_set("content_packaged_services_manifest") {
     "//services/tracing:manifest",
     "//services/video_capture/public/cpp:manifest",
     "//services/viz/public/cpp:manifest",
+    "//services/ml:manifest",
   ]
 
   public_deps = [
