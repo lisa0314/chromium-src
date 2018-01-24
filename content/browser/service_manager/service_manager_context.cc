@@ -81,6 +81,8 @@
 #include "services/tracing/tracing_service.h"
 #include "services/video_capture/public/mojom/constants.mojom.h"
 #include "services/video_capture/service_impl.h"
+#include "services/ml/public/interfaces/constants.mojom.h"
+#include "services/ml/ml_service.h"
 #include "services/viz/public/interfaces/constants.mojom.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/base/ui_features.h"
@@ -578,6 +580,14 @@ ServiceManagerContext::ServiceManagerContext(
     info.factory = base::BindRepeating(&metrics::CreateMetricsService);
     packaged_services_connection_->AddEmbeddedService(
         metrics::mojom::kMetricsServiceName, info);
+  }
+
+  {
+    service_manager::EmbeddedServiceInfo info;
+    info.factory = base::Bind(&ml::MLService::Create);
+    info.task_runner = base::ThreadTaskRunnerHandle::Get();
+    packaged_services_connection_->AddEmbeddedService(
+        ml::mojom::kServiceName, info);
   }
 
   ContentBrowserClient::StaticServiceMap services;
