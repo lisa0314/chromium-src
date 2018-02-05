@@ -1255,6 +1255,9 @@ extern const char kWebXrGamepadSupportDescription[];
 extern const char kWebXrHitTestName[];
 extern const char kWebXrHitTestDescription[];
 
+extern const char kWebMlName[];
+extern const char kWebMlDescription[];
+
 extern const char kZeroCopyName[];
 extern const char kZeroCopyDescription[];
 

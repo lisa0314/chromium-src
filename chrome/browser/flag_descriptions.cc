@@ -2122,6 +2122,10 @@ const char kWebXrHitTestName[] = "WebXR Hit Test";
 const char kWebXrHitTestDescription[] =
     "Enables access to raycasting against estimated XR scene geometry.";
 
+const char kWebMlName[] = "WebML";
+const char kWebMlDescription[] =
+    "Allow web applications to access experimental WebML APIs";
+
 const char kZeroCopyName[] = "Zero-copy rasterizer";
 const char kZeroCopyDescription[] =
     "Raster threads write directly to GPU memory associated with tiles.";

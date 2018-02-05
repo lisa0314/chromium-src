@@ -150,6 +150,7 @@ CONTENT_EXPORT extern const base::Feature kWebXrGamepadSupport;
 CONTENT_EXPORT extern const base::Feature kWebXrHitTest;
 CONTENT_EXPORT extern const base::Feature kWipeCorruptV2IDBDatabases;
 CONTENT_EXPORT extern const base::Feature kScriptStreamingOnPreload;
+CONTENT_EXPORT extern const base::Feature kWebMl;
 
 #if defined(OS_ANDROID)
 CONTENT_EXPORT extern const base::Feature kAndroidAutofillAccessibility;
