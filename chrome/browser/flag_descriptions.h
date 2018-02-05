@@ -1262,6 +1262,9 @@ extern const char kWebXrGamepadSupportDescription[];
 extern const char kWebXrHitTestName[];
 extern const char kWebXrHitTestDescription[];
 
+extern const char kWebMlName[];
+extern const char kWebMlDescription[];
+
 extern const char kWebXrOrientationSensorDeviceName[];
 extern const char kWebXrOrientationSensorDeviceDescription[];
 

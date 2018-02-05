@@ -400,6 +400,10 @@ void WebRuntimeFeatures::EnableWebXR(bool enable) {
   RuntimeEnabledFeatures::SetWebXREnabled(enable);
 }
 
+void WebRuntimeFeatures::EnableWebML(bool enable) {
+  RuntimeEnabledFeatures::SetWebMLEnabled(enable);
+}
+
 void WebRuntimeFeatures::EnableWebXRGamepadSupport(bool enable) {
   RuntimeEnabledFeatures::SetWebXRGamepadSupportEnabled(enable);
 }
