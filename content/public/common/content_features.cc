@@ -687,7 +687,7 @@ const base::Feature kWipeCorruptV2IDBDatabases{
 const base::Feature kScriptStreamingOnPreload{
     "ScriptStreamingOnPreload", base::FEATURE_DISABLED_BY_DEFAULT};
 
-const base::Feature kWebMl{"WebML", base::FEATURE_DISABLED_BY_DEFAULT};
+const base::Feature kWebMl{"WebML", base::FEATURE_ENABLED_BY_DEFAULT};
 
 #if defined(OS_ANDROID)
 // Autofill Accessibility in Android.
