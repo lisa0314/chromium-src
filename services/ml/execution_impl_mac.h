@@ -15,6 +15,8 @@
 #include "services/ml/model_impl_mac.h"
 #include "services/ml/compilation_impl_mac.h"
 
+#include <math.h>
+
 #import <Metal/MTLBuffer.h>
 
 @class MPSImage;
@@ -39,6 +41,8 @@ class ExecutionImplMac : public mojom::Execution {
   API_AVAILABLE(macos(10_13)) std::vector<id<MTLBuffer>> input_mtlbuffers_;
   std::vector<base::scoped_nsobject<MPSImage> > output_mpsimages_;
   API_AVAILABLE(macos(10_13)) std::vector<id<MTLBuffer>> output_mtlbuffers_;
+
+  void _base_softmax(const float *in, float *out, int size, float beta);
 
   DISALLOW_COPY_AND_ASSIGN(ExecutionImplMac);
 };

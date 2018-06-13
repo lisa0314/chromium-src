@@ -6,6 +6,7 @@
 #include "services/ml/mpscnn_context.h"
 
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
+#import <Accelerate/Accelerate.h>
 
 API_AVAILABLE(macosx(10.13)) @interface ConvDataSource : NSObject<MPSCNNConvolutionDataSource> {}
 @property(nonatomic, assign) float* weights_;
@@ -64,7 +65,7 @@ OperandMac::~OperandMac() = default;
 
 OperationMac::OperationMac() = default;
 OperationMac::OperationMac(const OperationMac& operation) = default;
-OperationMac::OperationMac(const Operation& operation) : Operation(operation) {}
+OperationMac::OperationMac(const Operation& operation) : Operation(operation), local_operation(BNNSFilter) {}
 OperationMac::~OperationMac() = default;
 
 MPSCNNNeuron* API_AVAILABLE(macosx(10.13)) CreateMPSCNNNeuron(int32_t fuse_code) {
@@ -158,15 +159,21 @@ CompilationImplMac::~CompilationImplMac() {}
 void CompilationImplMac::finish(int32_t preference, finishCallback callback) {
   DLOG(INFO) << "CompilationImplMac::finish";
   DLOG(INFO) << "  " << "preference: " << preference;
+  // is_BNNS = true;
+  is_BNNS = (preference == mojom::PREFER_SUSTAINED_SPEED) ? true : false;
+  DLOG(INFO) << "  " << "**********is_BNNS:******* ";
 
   if (@available(macOS 10.13, *)) {
-    id<MTLDevice> device = GetMPSCNNContext().device;
-    if (device == nil) {
-      DLOG(ERROR) << "Cannot create MTLDevice";
-      std::move(callback).Run(mojom::BAD_STATE);
-      return;
-    } else {
-      DLOG(INFO) << "Created MTLDevice: " << device.name.UTF8String;
+    if (is_BNNS == false) {
+      id<MTLDevice> device = GetMPSCNNContext().device;
+      DLOG(INFO) << "  " << "**********GetMPSCNNContext******* ";
+      if (device == nil) {
+        DLOG(ERROR) << "Cannot create MTLDevice";
+        std::move(callback).Run(mojom::BAD_STATE);
+        return;
+      } else {
+        DLOG(INFO) << "Created MTLDevice: " << device.name.UTF8String;
+      }
     }
   }
 
@@ -186,12 +193,25 @@ void CompilationImplMac::finish(int32_t preference, finishCallback callback) {
       OperandMac& operand = operands_[inputs[j]];
       operand.read_count += 1;
     }
+
     if (type == mojom::CONV_2D || type == mojom::DEPTHWISE_CONV_2D) {
-      success = CompileConv2DOrDepthwiseConv2D(operation);
+      if (is_BNNS) {
+        success = CompileConv2DOrDepthwiseConv2DBNNS(operation);
+      } else {
+        success = CompileConv2DOrDepthwiseConv2D(operation);
+      }      
     } else if (type == mojom::AVERAGE_POOL_2D || type == mojom::MAX_POOL_2D) {
-      success = CompileAverageOrMaxPool2D(operation);
+      if (is_BNNS) {
+        success = CompileAverageOrMaxPool2DBNNS(operation);
+      } else {
+        success = CompileAverageOrMaxPool2D(operation);
+      }   
     } else if (type == mojom::SOFTMAX) {
-      success = CompileSoftmax(operation);
+      if (is_BNNS) {
+        success = CompileSoftmaxBNNS(operation);
+      } else {
+        success = CompileSoftmax(operation);
+      }   
     } else if (type == mojom::RESHAPE) {
       success = CompileReshape(operation);
     } else if (type == mojom::CONCATENATION) {
@@ -210,6 +230,200 @@ void CompilationImplMac::finish(int32_t preference, finishCallback callback) {
   } else {
     std::move(callback).Run(mojom::BAD_DATA);
   }
+}
+
+bool CompilationImplMac::CompileConv2DOrDepthwiseConv2DBNNS(OperationMac& operation) {
+  DLOG(INFO) << "CompilationImplMac::CompileConv2DOrDepthwiseConv2D";
+  DLOG_IF(FATAL, operation.type != mojom::CONV_2D && operation.type != mojom::DEPTHWISE_CONV_2D);
+  int32_t input_width, input_height, output_width, output_height;
+  bool implicit_padding;
+  int32_t padding_left, padding_right, padding_top, padding_bottom;
+  int32_t stride_width, stride_height;
+  int32_t padding_code, fuse_code;
+  int32_t depth_out, filter_height, filter_width, depth_in;
+  bool depthwise = (operation.type == mojom::DEPTHWISE_CONV_2D);
+  int32_t depthwise_multiplier;
+
+  std::vector<uint32_t> inputs = operation.inputs;
+  std::vector<uint32_t> outputs = operation.outputs;
+  uint32_t output_idx = outputs[0];
+  OperandMac& output = operands_[output_idx];
+  output_height = output.dimensions[1];
+  output_width = output.dimensions[2];
+  int32_t i = 0;
+  int32_t input_idx = inputs[i++];
+  OperandMac& input = operands_[input_idx];
+  input_height = input.dimensions[1];
+  input_width = input.dimensions[2];
+
+  DLOG(INFO) << "  input_height: " << input_height << " input_width: " << input_width;
+  DLOG(INFO) << "  output_height: " << output_height << " output_width: " << output_width;
+
+  OperandMac& filter = operands_[inputs[i++]];
+  if (depthwise) {
+    depth_out = filter.dimensions[3];
+  } else {
+    depth_out = filter.dimensions[0];
+    depth_in = filter.dimensions[3];
+  } 
+  filter_height = filter.dimensions[1];
+  filter_width = filter.dimensions[2];
+
+  DLOG(INFO) << "  depth_out: " << depth_out;
+  DLOG(INFO) << "  filter_height: " << filter_height;
+  DLOG(INFO) << "  filter_width: " << filter_width;
+  DLOG(INFO) << "  depth_in: " << depth_in;
+
+  OperandMac& bias = operands_[inputs[i++]];
+  DLOG(INFO) << "  bias length: " << bias.dimensions[0];
+
+  if ((!depthwise && inputs.size() == 10) ||
+      (depthwise && inputs.size() == 11)) {
+    implicit_padding = false;
+    padding_left = getScalarInt32(values_[inputs[i++]], memory_.get());
+    padding_right = getScalarInt32(values_[inputs[i++]], memory_.get());
+    padding_top = getScalarInt32(values_[inputs[i++]], memory_.get());
+    padding_bottom = getScalarInt32(values_[inputs[i++]], memory_.get());
+  } else if ((!depthwise && inputs.size() == 7) ||
+             (depthwise && inputs.size() == 8)) {
+    implicit_padding = true;
+    padding_code = getScalarInt32(values_[inputs[i++]], memory_.get());
+  } else {
+    DLOG(ERROR) << "  inputs size is incorrect";
+    return false;
+  }
+
+  stride_width = getScalarInt32(values_[inputs[i++]], memory_.get());
+  stride_height = getScalarInt32(values_[inputs[i++]], memory_.get());
+
+  if (depthwise == true) {
+    depthwise_multiplier = getScalarInt32(values_[inputs[i++]], memory_.get());
+    if (depthwise_multiplier != 1) {
+      DLOG(ERROR) << "  depthwise_multiplier " << depthwise_multiplier << " is not supported.";
+      return false;
+    }
+    depth_in = depth_out / depthwise_multiplier;
+  }
+  fuse_code = getScalarInt32(values_[inputs[i++]], memory_.get());
+
+  DLOG(INFO) << "  implicit_padding: " << implicit_padding;
+  if (implicit_padding) {
+    DLOG(INFO) << "  padding_code: " << padding_code;
+  } else {
+    DLOG(INFO) << "  padding_left: " << padding_left;
+    DLOG(INFO) << "  padding_right: " << padding_right;
+    DLOG(INFO) << "  padding_top: " << padding_top;
+    DLOG(INFO) << "  padding_bottom: " << padding_bottom;
+  }
+  DLOG(INFO) << "  stride_width: " << stride_width;
+  DLOG(INFO) << "  stride_height: " << stride_height;
+  if (depthwise) {
+    DLOG(INFO) << "  depthwise_multiplier: " << depthwise_multiplier;
+  }
+  DLOG(INFO) << "  fuse_code: " << fuse_code;
+  
+  if (@available(macOS 10.13, *)) {
+    operation.fuse_code = fuse_code;
+
+    // build conv weights BNNSLayerData structure
+    BNNSConvolutionLayerParameters conv_params;
+    BNNSFilterParameters filter_params;
+    BNNSImageStackDescriptor in_desc, out_desc;
+    
+    ValueInfo weights_value_info = values_.at(inputs[1]);
+    const float* source_weights = reinterpret_cast<const float*>(memory_.get() + weights_value_info.offset);
+    ValueInfo bias_value_info = values_.at(inputs[2]);
+    const float* source_bias = reinterpret_cast<const float*>(memory_.get() + bias_value_info.offset);
+
+    // build conv_weights
+    BNNSLayerData conv_weights;
+    float* new_filter_weights = (float*)malloc(sizeof(float)*depth_in*depth_out*filter_height*filter_width);
+    if (depthwise) {
+      for ( auto i = 0; i < depth_in; ++i ) {
+        for ( auto h = 0; h < filter_height; ++h ) {
+          for ( auto w = 0; w < filter_width; ++w ) {
+            for ( auto o =0 ; o < depth_out; ++o ) {
+              auto old_idx = i * filter_height * filter_width * depth_out + 
+                        h * filter_width * depth_out +
+                        w * depth_out + o;
+              // kx + k_width * (ky + k_height * (i + in_channels * o))
+              auto new_idx = w + filter_width * (h + filter_height * (i + depth_in * o)); 
+              new_filter_weights[new_idx] = source_weights[old_idx];
+            } 
+          } 
+        } 
+      } 
+    } else {
+      for ( auto o = 0; o < depth_out; ++o ) {
+        for ( auto h = 0; h < filter_height; ++h ) {
+          for ( auto w = 0; w < filter_width; ++w ) {
+            for ( auto i = 0; i < depth_in; ++i ) {
+              auto old_idx = o * filter_height * filter_width * depth_in + 
+                        h * filter_width * depth_in +
+                        w * depth_in + i;
+              // kx + k_width * (ky + k_height * (i + in_channels * o))
+              auto new_idx = w + filter_width * (h + filter_height * (i + depth_in * o)); 
+              new_filter_weights[new_idx] = source_weights[old_idx] ;
+            } 
+          } 
+        }
+      }
+    }
+    conv_weights.data = new_filter_weights;
+    conv_weights.data_type = BNNSDataTypeFloat32;
+    // we can just ignore data_scale, data_bias and data_table
+    // for the data type in float32
+    conv_weights.data_scale = 0.0;
+    conv_weights.data_bias = 0.0;
+    conv_weights.data_table = nullptr;
+
+    // build conv bias
+    BNNSLayerData conv_bias;
+    conv_bias.data = source_bias;
+    conv_bias.data_type = BNNSDataTypeFloat32;
+    // we can just ignore data_scale, data_bias and data_table
+    // for the data type in float32
+    conv_bias.data_scale = 0.0;
+    conv_bias.data_bias = 0.0;
+    conv_bias.data_table = nullptr;
+
+    if (implicit_padding) {
+      if (padding_code == mojom::PADDING_SAME) {
+        padding_top = (int)(((output_height - 1) * stride_height + filter_height - input_height)/2);
+        padding_left = (int)(((output_width - 1) * stride_width + filter_width - input_width)/2);
+      } else {
+        padding_top = 0;
+        padding_left = 0;
+      }
+    }
+
+    conv_params.x_stride = stride_width;
+    conv_params.y_stride = stride_height;
+    conv_params.x_padding = padding_left;
+    conv_params.y_padding = padding_top;
+    conv_params.k_width = filter_width;
+    conv_params.k_height = filter_height;
+    conv_params.in_channels = depth_in;
+    conv_params.out_channels = depth_out;
+    conv_params.weights = conv_weights;
+    conv_params.bias = conv_bias;
+    conv_params.activation.function = BNNSActivationFunctionRectifiedLinear;
+    filter_params.n_threads = 0;
+    filter_params.alloc_memory = nullptr;
+    filter_params.free_memory = nullptr;
+    in_desc.width = input_width;
+    in_desc.height = input_height;
+    in_desc.channels = depth_in;
+    in_desc.row_stride = input_width ;
+    in_desc.image_stride = input_width * input_height ;
+    in_desc.data_type = BNNSDataTypeInt32;
+    out_desc.width = input_width;
+    out_desc.height = input_height;
+    out_desc.channels = depth_out;
+    out_desc.data_type = BNNSDataTypeInt32;
+    operation.filter = BNNSFilterCreateConvolutionLayer(&in_desc, &out_desc, &conv_params, &filter_params);
+  }
+  return true;
 }
 
 bool CompilationImplMac::CompileConv2DOrDepthwiseConv2D(OperationMac& operation) {
@@ -366,6 +580,114 @@ bool CompilationImplMac::CompileConv2DOrDepthwiseConv2D(OperationMac& operation)
   return true;
 }
 
+bool CompilationImplMac::CompileAverageOrMaxPool2DBNNS(OperationMac& operation) {
+  DLOG(INFO) << "CompilationImplMac::CompileAverageOrMaxPool2DBnns";
+  DLOG_IF(FATAL, operation.type != mojom::AVERAGE_POOL_2D && operation.type != mojom::MAX_POOL_2D);
+
+  bool implicit_padding;
+  int32_t input_width, input_height, input_channels, output_width, output_height, output_channels;
+  int32_t x_stride, y_stride;
+  int32_t padding_left, padding_right, padding_top, padding_bottom;
+  int32_t x_padding, y_padding;
+  int32_t k_width, k_height; 
+  int32_t padding_code;
+
+  std::vector<uint32_t> inputs = operation.inputs;
+  std::vector<uint32_t> outputs = operation.outputs;
+  uint32_t output_idx = outputs[0];
+  OperandMac& output = operands_[output_idx];
+  output_height = output.dimensions[1];
+  output_width = output.dimensions[2];
+  output_channels = output.dimensions[3];
+  int32_t i = 0;
+  int32_t input_idx = inputs[i++];
+  OperandMac& input = operands_[input_idx];
+  input_height = input.dimensions[1];
+  input_width = input.dimensions[2];
+  input_channels = input.dimensions[3];
+
+  DLOG(INFO) << "  input_height: " << input_height << " input_width: " << input_width;
+  DLOG(INFO) << "  output_height: " << output_height << " output_width: " << output_width;
+
+  if (inputs.size() == 10) {
+    implicit_padding = false;
+    padding_left = getScalarInt32(values_[inputs[i++]], memory_.get());
+    padding_right = getScalarInt32(values_[inputs[i++]], memory_.get());
+    padding_top = getScalarInt32(values_[inputs[i++]], memory_.get());
+    padding_bottom = getScalarInt32(values_[inputs[i++]], memory_.get());
+    
+    // bnns only accept x_padding and y_padding
+    x_padding = padding_left;
+    y_padding = padding_top;
+    DLOG(INFO) << "  x_padding: " << x_padding;
+    DLOG(INFO) << "  y_padding: " << y_padding;
+  } else if (inputs.size() == 7) {
+    implicit_padding = true;
+    padding_code = getScalarInt32(values_[inputs[i++]], memory_.get());
+  } else {
+    DLOG(ERROR) << "  inputs size is incorrect";
+      return false;
+  }
+
+  x_stride = getScalarInt32(values_[inputs[i++]], memory_.get());
+  y_stride = getScalarInt32(values_[inputs[i++]], memory_.get());
+  k_width = getScalarInt32(values_[inputs[i++]], memory_.get());
+  k_height = getScalarInt32(values_[inputs[i++]], memory_.get());
+  DLOG(INFO) << "  x_stride: " << x_stride;
+  DLOG(INFO) << "  y_stride: " << y_stride;
+  DLOG(INFO) << "  k_width: " << k_width;
+  DLOG(INFO) << "  k_height: " << k_height;
+  if (implicit_padding == true) {
+    if (padding_code == mojom::PADDING_SAME) {
+      y_padding = (int)(((output_height - 1) * y_stride + k_height - input_height)/2);
+      x_padding = (int)(((output_width - 1) * x_stride + k_width - input_width)/2);
+    } else {
+      y_padding = 0;
+      x_padding = 0;
+    }
+  }
+
+  if (@available(macOS 10.13, *)) {
+    BNNSLayerData layer_data;
+    BNNSFilterParameters filter_params;
+    BNNSPoolingLayerParameters pool;
+    BNNSImageStackDescriptor in_desc, out_desc;
+
+    layer_data.data_type = BNNSDataTypeFloat32; 
+    filter_params.n_threads = 0;
+    filter_params.alloc_memory = nullptr;
+    filter_params.free_memory = nullptr;
+    pool.x_stride = x_stride;
+    pool.y_stride = y_stride;
+    pool.x_padding = x_padding;
+    pool.y_padding = y_padding;
+    pool.k_width = k_width;
+    pool.k_height = k_height;
+    pool.in_channels = input_channels;
+    pool.out_channels = output_channels;
+    if (operation.type == mojom::AVERAGE_POOL_2D) {  
+      pool.pooling_function = BNNSPoolingFunctionAverage;
+    } else if (operation.type == mojom::MAX_POOL_2D) {
+      pool.pooling_function = BNNSPoolingFunctionMax; 
+    } else {
+      DLOG(ERROR) << "Operation " << operation.type << " is not supported";
+      return false;
+    }
+
+    in_desc.width = input_width;
+    in_desc.height = input_height;
+    in_desc.channels = input_channels;
+    in_desc.data_type = BNNSDataTypeInt32;
+    out_desc.width = input_width;
+    out_desc.height = input_height;
+    out_desc.channels = input_channels;
+    out_desc.data_type = BNNSDataTypeInt32;
+  
+    operation.filter = BNNSFilterCreatePoolingLayer(&in_desc, &out_desc, &pool, &filter_params);
+  }
+  return true;
+}
+
 bool CompilationImplMac::CompileAverageOrMaxPool2D(OperationMac& operation) {
   DLOG(INFO) << "CompilationImplMac::CompileAverageOrMaxPool2D";
   DLOG_IF(FATAL, operation.type != mojom::AVERAGE_POOL_2D && operation.type != mojom::MAX_POOL_2D);
@@ -488,6 +810,17 @@ bool CompilationImplMac::CompileSoftmax(OperationMac& operation) {
   return true;
 }
 
+/* add compileSoftmax for bnns */
+bool CompilationImplMac::CompileSoftmaxBNNS(OperationMac& operation) {
+  LOG(INFO) << "CompilationImplMac::CompileSoftmax";
+  DLOG_IF(FATAL, operation.type != mojom::SOFTMAX);
+  operation.local_operation = SoftMax;
+  std::vector<uint32_t> inputs = operation.inputs;
+  uint32_t beta = getScalarInt32(values_[inputs[1]], memory_.get());
+  operation.beta_softmax = beta;
+  return true;
+}
+
 bool CompilationImplMac::CompileReshape(OperationMac& reshape) {
   DLOG(INFO) << "CompilationImplMac::CompileReshape";
   DLOG_IF(FATAL, reshape.type != mojom::RESHAPE);
@@ -586,6 +919,7 @@ void CompilationImplMac::createExecution(createExecutionCallback callback) {
   
   init_params->memory = memory_handle->Clone(
       mojo::SharedBufferHandle::AccessMode::READ_WRITE);
+  DLOG(INFO) << "*******init_params->memory******";
 
   auto impl = std::make_unique<ExecutionImplMac>(this, std::move(memory_handle));
   mojom::ExecutionPtrInfo ptr_info;

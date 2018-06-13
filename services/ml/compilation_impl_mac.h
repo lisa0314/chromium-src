@@ -15,10 +15,18 @@
 #include "services/ml/execution_impl_mac.h"
 
 #include "base/mac/scoped_nsobject.h"
+#import <Accelerate/Accelerate.h>
+
+
 
 @class MPSCNNKernel;
 
 namespace ml {
+
+typedef enum LocalOperation {
+  BNNSFilter = 1,
+  SoftMax = 2,
+}LocalOperation;
 
 struct OperandMac : public Operand {
   OperandMac();
@@ -34,6 +42,10 @@ struct OperationMac : public Operation {
   OperationMac(const Operation&);
   ~OperationMac();
   base::scoped_nsobject<MPSCNNKernel> mpscnn_kernel;
+  ::BNNSFilter filter;
+  LocalOperation local_operation;
+  uint32_t beta_softmax;
+
   int fuse_code;
 };
 
@@ -52,6 +64,10 @@ class CompilationImplMac : public mojom::Compilation {
   bool CompileReshape(OperationMac&);
   bool CompileConcatenation(OperationMac&);
 
+  bool CompileConv2DOrDepthwiseConv2DBNNS(OperationMac&);
+  bool CompileAverageOrMaxPool2DBNNS(OperationMac&);
+  bool CompileSoftmaxBNNS(OperationMac&);
+
  private:
   friend class ExecutionImplMac;
   std::vector<OperandMac> operands_;
@@ -61,6 +77,7 @@ class CompilationImplMac : public mojom::Compilation {
   std::vector<uint32_t> outputs_;
   std::unique_ptr<int8_t []> memory_;
   uint32_t memory_size_;
+  bool is_BNNS;
   DISALLOW_COPY_AND_ASSIGN(CompilationImplMac);
 };
 
