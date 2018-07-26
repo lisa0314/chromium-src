@@ -135,7 +135,7 @@
           "tracing"
         ],
         "ml": [
-	        "neuralnetwork"
+	  "neuralnetwork"
         ],
         "ui": [ "arc_manager", "display_output_protection", "video_detector" ],
         "unzip_service": [ "unzip_file" ],
@@ -213,7 +213,7 @@
           "shape_detection.mojom.BarcodeDetectionProvider",
           "shape_detection.mojom.FaceDetectionProvider",
           "shape_detection.mojom.TextDetection",
-          "ml::mojom::NeuralNetwork",
+          "ml.mojom.NeuralNetwork",
           "ui.mojom.Gpu"
         ]
       },
@@ -237,7 +237,7 @@
           "shape_detection.mojom.BarcodeDetectionProvider",
           "shape_detection.mojom.FaceDetectionProvider",
           "shape_detection.mojom.TextDetection",
-          "ml::mojom::NeuralNetwork"
+          "ml.mojom.NeuralNetwork"
         ]
       }
     },
@@ -258,7 +258,7 @@
           "shape_detection.mojom.BarcodeDetectionProvider",
           "shape_detection.mojom.FaceDetectionProvider",
           "shape_detection.mojom.TextDetection",
-          "ml::mojom::NeuralNetwork"
+          "ml.mojom.NeuralNetwork"
         ]
       }
     },
@@ -276,7 +276,7 @@
           "shape_detection.mojom.BarcodeDetectionProvider",
           "shape_detection.mojom.FaceDetectionProvider",
           "shape_detection.mojom.TextDetection",
-          "ml::mojom::NeuralNetwork"
+          "ml.mojom.NeuralNetwork"
         ]
       }
     }
