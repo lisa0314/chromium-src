@@ -82,7 +82,6 @@
 #include "services/video_capture/public/mojom/constants.mojom.h"
 #include "services/video_capture/service_impl.h"
 #include "services/ml/public/interfaces/constants.mojom.h"
-#include "services/ml/ml_service.h"
 #include "services/viz/public/interfaces/constants.mojom.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/base/ui_features.h"
@@ -582,14 +581,6 @@ ServiceManagerContext::ServiceManagerContext(
         metrics::mojom::kMetricsServiceName, info);
   }
 
-  {
-    service_manager::EmbeddedServiceInfo info;
-    info.factory = base::Bind(&ml::MLService::Create);
-    info.task_runner = base::ThreadTaskRunnerHandle::Get();
-    packaged_services_connection_->AddEmbeddedService(
-        ml::mojom::kServiceName, info);
-  }
-
   ContentBrowserClient::StaticServiceMap services;
   GetContentClient()->browser()->RegisterInProcessServices(
       &services, packaged_services_connection_.get());
@@ -699,6 +690,10 @@ ServiceManagerContext::ServiceManagerContext(
       shape_detection::mojom::kServiceName,
       base::Bind(&StartServiceInGpuProcess,
                  shape_detection::mojom::kServiceName));
+
+  packaged_services_connection_->AddServiceRequestHandlerWithPID(
+      ml::mojom::kServiceName,
+      base::Bind(&StartServiceInGpuProcess, ml::mojom::kServiceName));
 
   packaged_services_connection_->Start();
 
