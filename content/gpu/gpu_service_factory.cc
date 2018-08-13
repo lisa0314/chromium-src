@@ -9,6 +9,8 @@
 #include "base/task/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
+#include "services/ml/ml_service.h"
+#include "services/ml/public/interfaces/constants.mojom.h"
 #include "services/shape_detection/public/mojom/constants.mojom.h"
 #include "services/shape_detection/shape_detection_service.h"
 
@@ -89,6 +91,12 @@ void GpuServiceFactory::RunService(
     service_manager::Service::RunAsyncUntilTermination(
         std::make_unique<shape_detection::ShapeDetectionService>(
             std::move(request)));
+    return;
+  }
+
+  if (service_name == ml::mojom::kServiceName) {
+    service_manager::Service::RunAsyncUntilTermination(
+        std::make_unique<ml::MLService>(std::move(request)));
     return;
   }
 }

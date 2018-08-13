@@ -90,7 +90,6 @@
 #include "services/video_capture/public/mojom/constants.mojom.h"
 #include "services/video_capture/service_impl.h"
 #include "services/ml/public/interfaces/constants.mojom.h"
-#include "services/ml/ml_service.h"
 #include "services/viz/public/interfaces/constants.mojom.h"
 #include "ui/base/buildflags.h"
 #include "ui/base/ui_base_features.h"
@@ -585,10 +584,10 @@ ServiceManagerContext::ServiceManagerContext(
                            service_manager_thread_task_runner_,
                            base::BindRepeating(&metrics::CreateMetricsService));
 
-  RegisterInProcessService(packaged_services_connection_.get(),
-                           ml::mojom::kServiceName,
-                           service_manager_thread_task_runner_,
-                           base::BindRepeating(&ml::MLService::Create));
+  // RegisterInProcessService(packaged_services_connection_.get(),
+  //                         ml::mojom::kServiceName,
+  //                         service_manager_thread_task_runner_,
+  //                         base::BindRepeating(&ml::MLService::Create));
 
   if (base::FeatureList::IsEnabled(
           media_session::features::kMediaSessionService)) {
@@ -729,6 +728,10 @@ ServiceManagerContext::ServiceManagerContext(
       shape_detection::mojom::kServiceName,
       base::Bind(&StartServiceInGpuProcess,
                  shape_detection::mojom::kServiceName));
+
+  packaged_services_connection_->AddServiceRequestHandlerWithPID(
+      ml::mojom::kServiceName,
+      base::Bind(&StartServiceInGpuProcess, ml::mojom::kServiceName));
 
   packaged_services_connection_->Start();
 
