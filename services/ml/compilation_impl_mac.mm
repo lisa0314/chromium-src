@@ -258,7 +258,7 @@ namespace ml {
     DLOG(INFO) << "CompilationImplMac::finish";
     DLOG(INFO) << "  "
                 << "preference: " << preference;
-    
+
     is_bnns_ = (preference == mojom::PREFER_FAST_SINGLE_ANSWER) ? true : false;
     DLOG(INFO) << "  "
                << "**********is_BNNS:******* " << is_bnns_;
@@ -920,11 +920,11 @@ namespace ml {
     return true;
   }
 
-  bool CompilationImplMac::CompileReshapeBNNS(OperationMac & operation) {
+  bool CompilationImplMac::CompileReshapeBNNS(OperationMac & reshape) {
     DLOG(INFO) << "CompilationImplMac::CompileReshape";
     DLOG_IF(FATAL, reshape.type != mojom::RESHAPE);
 
-    operation.local_operation = KReshape;
+    reshape.local_operation = KReshape;
     return true;
   }
 
