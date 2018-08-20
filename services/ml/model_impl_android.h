@@ -5,8 +5,9 @@
 #ifndef SERVICES_ML_MODEL_IMPL_ANDROID_H_
 #define SERVICES_ML_MODEL_IMPL_ANDROID_H_
 
+#include <vector>
+
 #include "base/macros.h"
-#include "mojo/public/cpp/bindings/strong_binding.h"
 #include "services/ml/public/interfaces/model.mojom.h"
 #include "services/ml/public/interfaces/constants.mojom.h"
 #include "services/ml/common.h"
@@ -27,15 +28,21 @@ class ModelImplAndroid : public mojom::Model {
   ModelImplAndroid();
   ~ModelImplAndroid() override;
 
-  void finish(mojom::ModelInfoPtr model_info, finishCallback callback) override;
+  void Finish(mojom::ModelInfoPtr model_info, FinishCallback callback) override;
 
-  void createCompilation(createCompilationCallback callback) override;
+  void CreateCompilation(CreateCompilationCallback callback) override;
 
-private:
-  int32_t AddOperand(int32_t type, const std::vector<uint32_t>& dimensions, float scale, int32_t zeroPoint);
+ private:
+  int32_t AddOperand(int32_t type,
+                     const std::vector<uint32_t>& dimensions,
+                     float scale,
+                     int32_t zeroPoint);
   int32_t SetOperandValue(uint32_t index, const void* buffer, uint32_t length);
-  int32_t AddOperation(int32_t type, const std::vector<uint32_t>& inputs, const std::vector<uint32_t>& outputs);
-  int32_t IdentifyInputsAndOutputs(const std::vector<uint32_t>& inputs, const std::vector<uint32_t>& outputs);
+  int32_t AddOperation(int32_t type,
+                       const std::vector<uint32_t>& inputs,
+                       const std::vector<uint32_t>& outputs);
+  int32_t IdentifyInputsAndOutputs(const std::vector<uint32_t>& inputs,
+                                   const std::vector<uint32_t>& outputs);
 
  private:
   friend class CompilationImplAndroid;
