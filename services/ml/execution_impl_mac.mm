@@ -10,6 +10,8 @@
 
 namespace ml {
 
+namespace {
+
 NSString* API_AVAILABLE(macosx(10.13)) KernelFor(const MPSImage* X,
                                                  NSString* arrayKernel,
                                                  NSString* nonArrayKernel) {
@@ -66,10 +68,16 @@ bool GetMPSImageInfo(const OperandMac& operand,
     channels = dimensions[2];
     return true;
   } else if (dimensions.size() == 2) {
-    n = dimensions[0];
+    n = 1;
+    height = 1;
+    width = dimensions[0];
     channels = dimensions[1];
+    return true;
+  } else if (dimensions.size() == 1) {
+    n = 1;
     height = 1;
     width = 1;
+    channels = dimensions[0];
     return true;
   } else {
     DLOG(ERROR) << "dimension " << dimensions.size() << " is not supported";
@@ -89,10 +97,6 @@ MPSImageDescriptor* API_AVAILABLE(macosx(10.13))
   if (!GetMPSImageInfo(operand, n, width, height, channels)) {
     return mpsimage_desc;
   }
-  if (n != 1) {
-    LOG(ERROR) << "number of images " << n << " is not supported";
-    return mpsimage_desc;
-  }
   mpsimage_desc = [MPSImageDescriptor
       imageDescriptorWithChannelFormat:MPSImageFeatureChannelFormatFloat16
                                  width:width
@@ -106,10 +110,57 @@ MPSImageDescriptor* API_AVAILABLE(macosx(10.13))
   return mpsimage_desc;
 }
 
+MPSImage* API_AVAILABLE(macosx(10.13)) FindMPSImageByIndex(
+    uint32_t index,
+    std::vector<uint32_t>& index_array,
+    std::vector<base::scoped_nsobject<MPSImage>>& image_array) {
+  MPSImage* image = nullptr;
+  if (@available(macOS 10.13, *)) {
+    for (size_t i = 0; i < index_array.size(); ++i) {
+      const uint32_t index_in_array = index_array[i];
+      if (index == index_in_array) {
+        image = image_array[i];
+        break;
+      }
+    }
+  }
+  return image;
+}
+
+}  // namespace {
+
 ExecutionImplMac::ExecutionImplMac(CompilationImplMac* compilation,
                                    mojo::ScopedSharedBufferHandle memory) {
   compilation_ = compilation;
   memory_ = std::move(memory);
+  if (compilation_->is_bnns_) {
+    PrepareBnnsOperandsMemory();
+  } else {
+    PrepareMPSOperandsMemory();
+  }
+}
+
+ExecutionImplMac::~ExecutionImplMac() {
+  if (compilation_->is_bnns_) {
+    for (auto iter = bnns_operands_memory_map_.begin();
+         iter != bnns_operands_memory_map_.end(); iter++) {
+      float* ptr = iter->second;
+      if (ptr != nullptr) {
+        free(iter->second);
+      }
+    }
+    for (size_t i = 0; i < compilation_->operations_.size(); i++) {
+      const OperationMac& operation = compilation_->operations_[i];
+      if (operation.local_operation == KBNNSFilter) {
+        if (@available(macOS 10.12, *)) {
+          BNNSFilterDestroy(operation.filter);
+        }
+      }
+    }
+  }
+}
+
+void ExecutionImplMac::PrepareMPSOperandsMemory() {
   uint32_t total_length = 0;
   uint32_t inputs_size = compilation_->inputs_.size();
   if (@available(macOS 10.13, *)) {
@@ -175,27 +226,29 @@ ExecutionImplMac::ExecutionImplMac(CompilationImplMac* compilation,
     outputs_info_.push_back(std::move(info));
     total_length += length;
   }
-  // prepare memory for other operands
-  if (compilation_->is_bnns_) {
-    PrepareBnnsOperandsMemory();
-  }
-}
-
-ExecutionImplMac::~ExecutionImplMac() {
-  if (compilation_->is_bnns_) {
-    for (auto iter = bnns_operands_memory_map_.begin();
-         iter != bnns_operands_memory_map_.end(); iter++) {
-      float* ptr = iter->second;
-      if (ptr != nullptr) {
-        free(iter->second);
-      }
+  uint32_t constants_size = compilation_->constants_.size();
+  if (@available(macOS 10.13, *)) {
+    if (compilation_->is_bnns_ == false) {
+      constant_mpsimages_.resize(constants_size);
+      constant_mtlbuffers_.resize(constants_size);
     }
-    for (size_t i = 0; i < compilation_->operations_.size(); i++) {
-      const OperationMac& operation = compilation_->operations_[i];
-      if (operation.local_operation == KBNNSFilter) {
-        if (@available(macOS 10.12, *)) {
-          BNNSFilterDestroy(operation.filter);
+  }
+  for (size_t i = 0; i < constants_size; ++i) {
+    OperandMac& operand = compilation_->operands_[compilation_->constants_[i]];
+    uint32_t length = operand.requiredSize();
+    if (@available(macOS 10.13, *)) {
+      if (compilation_->is_bnns_ == false) {
+        MPSImageDescriptor* descriptor = CreateMPSImageDescriptor(operand);
+        if (!descriptor) {
+          return;
         }
+        MPSImage* mps_img =
+            [[MPSImage alloc] initWithDevice:GetMPSCNNContext().device
+                             imageDescriptor:descriptor];
+        constant_mpsimages_[i].reset(mps_img);
+        constant_mtlbuffers_[i] = [GetMPSCNNContext().device
+            newBufferWithLength:length
+                        options:MTLResourceOptionCPUCacheModeWriteCombined];
       }
     }
   }
@@ -231,11 +284,6 @@ void ExecutionImplMac::StartCompute(StartComputeCallback callback) {
   if (@available(macOS 10.13, *)) {
     do {
       @autoreleasepool {
-        if (compilation_->inputs_.size() > 1) {
-          success = false;
-          break;
-        }
-
         if (compilation_->is_bnns_) {
           for (size_t i = 0; i < compilation_->operations_.size(); i++) {
             float* src = nullptr;
@@ -394,94 +442,93 @@ void ExecutionImplMac::StartCompute(StartComputeCallback callback) {
         } else {
           id<MTLCommandBuffer> command_buffer =
               [GetMPSCNNContext().command_queue commandBuffer];
-          const uint32_t input_idx = compilation_->inputs_[0];
-          std::unique_ptr<OperandInfo>& input_data = inputs_info_[0];
-          MPSImage* input_img = input_mpsimages_[0].get();
-          id<MTLBuffer> input_buffer = input_mtlbuffers_[0];
 
-          {
-            memcpy([input_buffer contents], input_data->mapping.get(),
-                   input_data->length);
-            id<MTLComputeCommandEncoder> encoder =
-                [command_buffer computeCommandEncoder];
-            id<MTLComputePipelineState> state =
-                GetMPSCNNContext().GetSpecializedPipelineState(
-                    KernelFor(input_img, @"copy_nhwc_to_metal",
-                              @"copy_nhwc_to_metal_nonarray"),
-                    {{ushort(input_img.height), ushort(input_img.width),
-                      ushort(input_img.featureChannels)}});
-            [encoder setComputePipelineState:state];
-            [encoder setBuffer:input_buffer offset:0 atIndex:0];
-            [encoder setTexture:[input_img texture] atIndex:0];
-            const auto& inputLaunchParams =
-                SpatialPointwiseKernelLaunchParams(state, input_img);
-            [encoder
-                 dispatchThreadgroups:inputLaunchParams.threadgroupsPerGrid
-                threadsPerThreadgroup:inputLaunchParams.threadsPerThreadgroup];
-            [encoder endEncoding];
+          for (size_t i = 0; i < compilation_->inputs_.size(); ++i) {
+            std::unique_ptr<OperandInfo>& input_data = inputs_info_[i];
+            const MPSImage* mps_img = input_mpsimages_[i].get();
+            const id<MTLBuffer> mtl_buffer = input_mtlbuffers_[i];
+            UploadToMPSImage(mps_img, mtl_buffer, command_buffer,
+                             input_data->mapping.get(), input_data->length);
           }
 
-          std::map<uint32_t, MPSTemporaryImage*> tmp_mpsimage_cache;
+          for (size_t i = 0; i < compilation_->constants_.size(); ++i) {
+            uint32_t index = compilation_->constants_[i];
+            if (compilation_->values_.find(index) ==
+                compilation_->values_.end()) {
+              DLOG(ERROR) << "Can't find constant " << index;
+              success = false;
+              break;
+            }
+            const ValueInfo& value_info =
+                compilation_->values_[compilation_->constants_[i]];
+            const MPSImage* mps_img = constant_mpsimages_[i].get();
+            const id<MTLBuffer> mtl_buffer = constant_mtlbuffers_[i];
+            const void* cpu_buffer = static_cast<const void*>(
+                compilation_->memory_.get() + value_info.offset);
+            UploadToMPSImage(mps_img, mtl_buffer, command_buffer, cpu_buffer,
+                             value_info.length);
+          }
+
           for (size_t i = 0; i < compilation_->operations_.size(); i++) {
             const OperationMac& operation = compilation_->operations_[i];
             MPSCNNKernel* kernel = operation.mpscnn_kernel.get();
-            if (!kernel) {
+            MPSCNNBinaryKernel* binary_kernel =
+                operation.mpscnn_binary_kernel.get();
+            bool fuse_relu = operation.fuse_code == mojom::FUSED_RELU1 ||
+                             operation.fuse_code == mojom::FUSED_RELU6;
+            if (!kernel && !binary_kernel) {
               DLOG(INFO) << "No kernel compiled for operation " << i << " type "
-                        << operation.type;
+                         << operation.type;
               continue;
             }
-            MPSImage* src_img = nullptr;
-            MPSImage* dst_img = nullptr;
-            uint32_t operation_input_idx = operation.inputs[0];
-            const OperandMac& operation_input =
-                compilation_->operands_[operation_input_idx];
-            if (operation_input_idx == input_idx) {
-              src_img = input_img;
+
+            MPSImage* src_img =
+                FindInputOrConstantMPSImageByIndex(operation.inputs[0]);
+            if (!src_img) {
+              src_img = FindOrCreateMPSTemporaryImageByIndex(
+                  operation.inputs[0], command_buffer);
+              if (!src_img) {
+                success = false;
+                DLOG(ERROR)
+                    << "Can't find or create mps image for operation "
+                    << operation.type << " input " << operation.inputs[0];
+                break;
+              }
             }
-            uint32_t operation_output_idx = operation.outputs[0];
+
+            MPSImage* secondary_src_img = nullptr;
+            if (binary_kernel) {
+              secondary_src_img =
+                  FindInputOrConstantMPSImageByIndex(operation.inputs[1]);
+              if (!secondary_src_img) {
+                secondary_src_img = FindOrCreateMPSTemporaryImageByIndex(
+                    operation.inputs[1], command_buffer);
+                if (!secondary_src_img) {
+                  success = false;
+                  DLOG(ERROR)
+                      << "Can't find or create mps image for operation "
+                      << operation.type << " input " << operation.inputs[1];
+                  break;
+                }
+              }
+            }
+
+            const uint32_t operation_output_idx = operation.outputs[0];
             const OperandMac& operation_output =
                 compilation_->operands_[operation_output_idx];
-            for (size_t j = 0; j < compilation_->outputs_.size(); ++j) {
-              if (operation_output_idx == compilation_->outputs_[j]) {
-                dst_img = output_mpsimages_[j];
-              }
-            }
-            if (!src_img) {
-              if (tmp_mpsimage_cache.find(operation_input_idx) ==
-                  tmp_mpsimage_cache.end()) {
-                MPSImageDescriptor* descriptor = CreateMPSImageDescriptor(operation_input);
-                if (!descriptor) {
-                  success = false;
-                  break;
-                }
-                MPSTemporaryImage* temp_image = [MPSTemporaryImage
-                    temporaryImageWithCommandBuffer:command_buffer
-                                    imageDescriptor:descriptor];
-                LOG(INFO) << "Set readCount as " << operation_input.read_count;
-                temp_image.readCount = operation_input.read_count;
-                tmp_mpsimage_cache[operation_input_idx] = temp_image;
-              }
-              src_img = tmp_mpsimage_cache[operation_input_idx];
-            }
+            MPSImage* dst_img = FindOutputMPSImageByIndex(operation_output_idx);
             if (!dst_img) {
-              if (tmp_mpsimage_cache.find(operation_output_idx) ==
-                  tmp_mpsimage_cache.end()) {
-                MPSImageDescriptor* descriptor = CreateMPSImageDescriptor(operation_output);
-                if (!descriptor) {
-                  success = false;
-                  break;
-                }
-                MPSTemporaryImage* temp_image = [MPSTemporaryImage
-                    temporaryImageWithCommandBuffer:command_buffer
-                                    imageDescriptor:descriptor];
-                LOG(INFO) << "Set readCount as " << operation_output.read_count;
-                temp_image.readCount = operation_output.read_count;
-                tmp_mpsimage_cache[operation_output_idx] = temp_image;
+              dst_img = FindOrCreateMPSTemporaryImageByIndex(
+                  operation_output_idx, command_buffer);
+              if (!dst_img) {
+                success = false;
+                DLOG(ERROR)
+                    << "Can't find or create mps image for operation "
+                    << operation.type << " output " << operation.outputs[0];
+                break;
               }
-              dst_img = tmp_mpsimage_cache[operation_output_idx];
             }
-            if (operation.fuse_code == mojom::FUSED_RELU1 ||
-                operation.fuse_code == mojom::FUSED_RELU6) {
+            if (fuse_relu) {
               // Insert relu layer
               MPSTemporaryImage* relu_input = [MPSTemporaryImage
                   temporaryImageWithCommandBuffer:command_buffer
@@ -512,8 +559,14 @@ void ExecutionImplMac::StartCompute(StartComputeCallback callback) {
                                               .threadsPerThreadgroup];
                 [encoder endEncoding];
               }
-            } else {
-              if (src_img.featureChannels == 3 && dst_img.featureChannels == 4) {
+            } else if (binary_kernel) {
+              [binary_kernel encodeToCommandBuffer:command_buffer
+                                      primaryImage:src_img
+                                    secondaryImage:secondary_src_img
+                                  destinationImage:dst_img];
+            } else if (kernel) {
+              if (src_img.featureChannels == 3 &&
+                  dst_img.featureChannels == 4) {
                 DLOG(ERROR) << @"Number of source feature channels needed by "
                                 "convolution 4 are not available in image with"
                                 " 3 feature channels";
@@ -568,6 +621,8 @@ void ExecutionImplMac::StartCompute(StartComputeCallback callback) {
             // compilation_->operands_[compilation_->outputs_[i]];
             // PrintOperand(operand, output_data);
           }
+
+          tmp_mpsimage_cache_.clear();
         }
       }  // @autoreleasepool
     } while (0);
@@ -580,5 +635,68 @@ void ExecutionImplMac::StartCompute(StartComputeCallback callback) {
   }
 }
 
-}  // namespace ml
+MPSImage* ExecutionImplMac::FindInputOrConstantMPSImageByIndex(uint32_t index) {
+  MPSImage* img =
+      FindMPSImageByIndex(index, compilation_->inputs_, input_mpsimages_);
+  if (!img) {
+    img = FindMPSImageByIndex(index, compilation_->constants_,
+                              constant_mpsimages_);
+  }
+  return img;
+}
 
+MPSImage* ExecutionImplMac::FindOutputMPSImageByIndex(uint32_t index) {
+  return FindMPSImageByIndex(index, compilation_->outputs_, output_mpsimages_);
+}
+
+MPSTemporaryImage* ExecutionImplMac::FindOrCreateMPSTemporaryImageByIndex(
+    uint32_t index,
+    const id<MTLCommandBuffer>& command_buffer) {
+  MPSTemporaryImage* temp_image = nullptr;
+  if (@available(macOS 10.13, *)) {
+    const OperandMac& operand = compilation_->operands_[index];
+    if (tmp_mpsimage_cache_.find(index) == tmp_mpsimage_cache_.end()) {
+      MPSImageDescriptor* descriptor = CreateMPSImageDescriptor(operand);
+      if (!descriptor) {
+        return nullptr;
+      }
+      temp_image =
+          [MPSTemporaryImage temporaryImageWithCommandBuffer:command_buffer
+                                             imageDescriptor:descriptor];
+      LOG(INFO) << "Set readCount as " << operand.read_count;
+      temp_image.readCount = operand.read_count;
+      tmp_mpsimage_cache_[index] = temp_image;
+    }
+    temp_image = tmp_mpsimage_cache_[index];
+  }
+  return temp_image;
+}
+
+void ExecutionImplMac::UploadToMPSImage(
+    const MPSImage* mps_image,
+    const id<MTLBuffer>& mtl_buffer,
+    const id<MTLCommandBuffer>& command_buffer,
+    const void* cpu_buffer,
+    size_t length) {
+  if (@available(macOS 10.13, *)) {
+    memcpy([mtl_buffer contents], cpu_buffer, length);
+    id<MTLComputeCommandEncoder> encoder =
+        [command_buffer computeCommandEncoder];
+    id<MTLComputePipelineState> state =
+        GetMPSCNNContext().GetSpecializedPipelineState(
+            KernelFor(mps_image, @"copy_nhwc_to_metal",
+                      @"copy_nhwc_to_metal_nonarray"),
+            {{ushort(mps_image.height), ushort(mps_image.width),
+              ushort(mps_image.featureChannels)}});
+    [encoder setComputePipelineState:state];
+    [encoder setBuffer:mtl_buffer offset:0 atIndex:0];
+    [encoder setTexture:[mps_image texture] atIndex:0];
+    const auto& inputLaunchParams =
+        SpatialPointwiseKernelLaunchParams(state, mps_image);
+    [encoder dispatchThreadgroups:inputLaunchParams.threadgroupsPerGrid
+            threadsPerThreadgroup:inputLaunchParams.threadsPerThreadgroup];
+    [encoder endEncoding];
+  }
+}
+
+}  // namespace ml

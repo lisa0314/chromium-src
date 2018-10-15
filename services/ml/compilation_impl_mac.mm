@@ -332,6 +332,13 @@ namespace ml {
         } else {
           success = CompileConcatenation(operation);
         }
+      } else if (type == mojom::ADD || type == mojom::MUL) {
+        if (is_bnns_) {
+          DLOG(ERROR) << "Operation is not supported";
+          success = false;
+        } else {
+          success = CompileArithmetic(operation);
+        }
       } else {
         DLOG(ERROR) << "Operation is not supported";
         success = false;
@@ -1049,6 +1056,33 @@ namespace ml {
             }
             channelOffset += operand.dimensions[axis];
           }
+        }
+      }
+    }
+
+    return true;
+  }
+
+  bool CompilationImplMac::CompileArithmetic(OperationMac& operation) {
+    DLOG(INFO) << "CompilationImplMac::CompileArithmetic";
+    DLOG_IF(FATAL, operation.type != mojom::ADD && operation.type != mojom::MUL);
+
+    if (@available(macOS 10.13.4, *)) {
+      MPSCNNArithmetic* arithmetic = nullptr;
+      if (operation.type == mojom::ADD) {
+        arithmetic = [[MPSCNNAdd alloc] initWithDevice:GetMPSCNNContext().device];
+      } else if (operation.type == mojom::MUL) {
+        arithmetic = [[MPSCNNMultiply alloc] initWithDevice:GetMPSCNNContext().device];
+      }
+
+      if (!arithmetic) return false;
+
+      operation.mpscnn_binary_kernel.reset(arithmetic);
+
+      // Check constants for input 0 and 1
+      for (size_t i = 0; i < operation.inputs.size() - 1; ++i) {
+        if (values_.find(operation.inputs[i]) != values_.end()) {
+          constants_.push_back(operation.inputs[i]);
         }
       }
     }
