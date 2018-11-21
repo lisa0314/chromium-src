@@ -16,6 +16,7 @@
 #import <CoreWLAN/CoreWLAN.h>
 #import <IOBluetooth/IOBluetooth.h>
 #import <ImageCaptureCore/ImageCaptureCore.h>
+#import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <QuartzCore/QuartzCore.h>
 #include <stdint.h>
 
@@ -338,6 +339,25 @@ typedef NSString* VNBarcodeSymbology NS_STRING_ENUM;
 @end
 
 #endif  // MAC_OS_X_VERSION_10_13
+
+// Once Chrome no longer supports OSX 10.13.4, everything within this
+// preprocessor block can be removed.
+#if !defined(MAC_OS_X_VERSION_10_13_4) || \
+    MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_13_4
+
+API_AVAILABLE(macos(10.13.4))
+@interface MPSCNNArithmetic : MPSCNNBinaryKernel
+@property (readwrite, nonatomic) float minimumValue;
+@property (readwrite, nonatomic) float maximumValue;
+@end
+API_AVAILABLE(macos(10.13.4))
+@interface MPSCNNAdd : MPSCNNArithmetic
+@end
+API_AVAILABLE(macos(10.13.4))
+@interface MPSCNNMultiply : MPSCNNArithmetic
+@end
+
+#endif  // MAC_OS_X_VERSION_10_13_4
 
 // ----------------------------------------------------------------------------
 // The symbol for kCWSSIDDidChangeNotification is available in the
