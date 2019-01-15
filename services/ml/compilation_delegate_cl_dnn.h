@@ -11,23 +11,10 @@
 
 #include "base/macros.h"
 #include "mojo/public/cpp/bindings/strong_binding.h"
-#if defined(OS_LINUX)
-#include "services/ml/cl_dnn_symbol_table.h"
-#endif
 #include "services/ml/common.h"
 #include "services/ml/compilation_impl.h"
 #include "services/ml/public/interfaces/model.mojom.h"
 #include "third_party/clDNN/api/C/cldnn.h"
-
-// Accesses clDNN functions through our late-binding symbol table instead of
-// directly. This way we don't have to link to libclDNN, which means our binary
-// will work on systems that don't have it.
-#if defined(OS_LINUX)
-extern ml::ClDnnSymbolTable* GetClDnnSymbolTable();
-#define LATE(sym) LATESYM_GET(ml::ClDnnSymbolTable, GetClDnnSymbolTable(), sym)
-#else
-#define LATE(sym) sym
-#endif
 
 namespace ml {
 
@@ -58,30 +45,14 @@ class CompilationDelegateClDnn : public CompilationDelegate {
   int32_t CldnnAddActivationByFusedCode(const std::string& input,
                                         const std::string& id,
                                         int32_t fuse_code);
-  int32_t CldnnAddElementwise(int32_t type,
-                              const std::vector<uint32_t>& inputs,
-                              const std::vector<uint32_t>& outputs);
-  int32_t CldnnAddConvolution(int32_t type,
-                              const std::vector<uint32_t>& inputs,
-                              const std::vector<uint32_t>& outputs);
-  int32_t CldnnAddPooling(int32_t type,
-                          const std::vector<uint32_t>& inputs,
-                          const std::vector<uint32_t>& outputs);
-  int32_t CldnnAddSoftmax(int32_t type,
-                          const std::vector<uint32_t>& inputs,
-                          const std::vector<uint32_t>& outputs);
-  int32_t CldnnAddReshape(int32_t type,
-                          const std::vector<uint32_t>& inputs,
-                          const std::vector<uint32_t>& outputs);
-  int32_t CldnnAddConcatenation(int32_t type,
-                                const std::vector<uint32_t>& inputs,
-                                const std::vector<uint32_t>& outputs);
-  int32_t CldnnAddFullyConnected(int32_t type,
-                                 const std::vector<uint32_t>& inputs,
-                                 const std::vector<uint32_t>& outputs);
-  int32_t CldnnAddResizeBilinear(int32_t type,
-                                 const std::vector<uint32_t>& inputs,
-                                 const std::vector<uint32_t>& outputs);
+  int32_t CldnnAddElementwise(const mojom::OperationPtr& operation);
+  int32_t CldnnAddConvolution(const mojom::OperationPtr& operation);
+  int32_t CldnnAddPooling(const mojom::OperationPtr& operation);
+  int32_t CldnnAddSoftmax(const mojom::OperationPtr& operation);
+  int32_t CldnnAddReshape(const mojom::OperationPtr& operation);
+  int32_t CldnnAddConcatenation(const mojom::OperationPtr& operation);
+  int32_t CldnnAddFullyConnected(const mojom::OperationPtr& operation);
+  int32_t CldnnAddResizeBilinear(const mojom::OperationPtr& operation);
 
  private:
   const CompilationImpl* compilation_;
