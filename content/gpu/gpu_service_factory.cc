@@ -95,8 +95,13 @@ void GpuServiceFactory::RunService(
   }
 
   if (service_name == ml::mojom::kServiceName) {
-    service_manager::Service::RunAsyncUntilTermination(
-        std::make_unique<ml::MLService>(std::move(request)));
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner =
+        base::CreateSingleThreadTaskRunnerWithTraits(
+            {base::TaskPriority::USER_BLOCKING});
+    task_runner->PostTask(FROM_HERE, base::BindOnce([]() {
+                            service_manager::Service::RunAsyncUntilTermination(
+                                std::make_unique<ml::MLService>());
+                          }));
     return;
   }
 }
