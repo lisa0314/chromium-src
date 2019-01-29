@@ -76,6 +76,8 @@ void GpuServiceFactory::RegisterServices(ServiceMap* services) {
 
   service_manager::EmbeddedServiceInfo ml_info;
   ml_info.factory = base::Bind(&ml::MLService::Create);
+  ml_info.task_runner = base::CreateSingleThreadTaskRunnerWithTraits(
+      {base::TaskPriority::USER_BLOCKING});
   services->insert(std::make_pair(ml::mojom::kServiceName, ml_info));
 }
 
