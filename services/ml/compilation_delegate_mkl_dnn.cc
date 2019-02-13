@@ -672,7 +672,7 @@ int32_t CompilationDelegateMklDnn::MkldnnAddConvolution(
     int weights_dims[5] = {params.depth_out, 1, 1, params.filter_height,
                            params.filter_width};
     status = LATE(mkldnn_memory_desc_init)(&weights_desc, 5, weights_dims,
-                                           mkldnn_f32, mkldnn_hwigo);
+                                           mkldnn_f32, mkldnn_any);
   } else {
     // Weights logical order is oihw
     int weights_dims[4] = {params.depth_out, params.depth_in,
@@ -1127,7 +1127,7 @@ int32_t CompilationDelegateMklDnn::MkldnnAddSoftmax(
       LATE(mkldnn_primitive_desc_query_memory_d)(input_pd);
   mkldnn_softmax_desc_t softmax_desc;
   status = LATE(mkldnn_softmax_forward_desc_init)(&softmax_desc, mkldnn_forward,
-                                                  input_md, 1);
+                                                  input_md, input_md->ndims - 1);
   if (status != mojom::NOT_ERROR) {
     LOG(ERROR) << "[MKLDNN] failed to init softmax descriptor " << status;
     return mojom::OP_FAILED;
