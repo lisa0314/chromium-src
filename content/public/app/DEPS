@@ -25,6 +25,7 @@ specific_include_rules = {
     "+services/device/public/cpp/manifest.h",
     "+services/media_session/public/cpp/manifest.h",
     "+services/metrics/public/cpp/manifest.h",
+    "+services/ml/public/cpp/manifest.h",
     "+services/network/public/cpp/manifest.h",
     "+services/resource_coordinator/public/cpp/manifest.h",
     "+services/shape_detection/public/cpp/manifest.h",

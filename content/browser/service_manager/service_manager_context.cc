@@ -68,6 +68,7 @@
 #include "services/media_session/public/mojom/constants.mojom.h"
 #include "services/metrics/metrics_mojo_service.h"
 #include "services/metrics/public/mojom/constants.mojom.h"
+#include "services/ml/public/mojom/constants.mojom.h"
 #include "services/network/network_service.h"
 #include "services/network/public/cpp/cross_thread_shared_url_loader_factory_info.h"
 #include "services/network/public/cpp/features.h"
@@ -89,7 +90,6 @@
 #include "services/tracing/tracing_service.h"
 #include "services/video_capture/public/mojom/constants.mojom.h"
 #include "services/video_capture/service_impl.h"
-#include "services/ml/public/mojom/constants.mojom.h"
 #include "services/viz/public/interfaces/constants.mojom.h"
 #include "ui/base/buildflags.h"
 #include "ui/base/ui_base_features.h"
@@ -127,7 +127,7 @@ base::LazyInstance<std::map<std::string, base::WeakPtr<UtilityProcessHost>>>::
 // On ChromeOS the network service has to run on the IO thread because
 // ProfileIOData and NetworkContext both try to set up NSS, which has has to be
 // called from the IO thread.
-const base::Feature kNetworkServiceDedicatedThread{
+const base::Feature kNetworkServiceDedicatedThread {
   "NetworkServiceDedicatedThread",
 #if defined(OS_CHROMEOS)
       base::FEATURE_DISABLED_BY_DEFAULT
@@ -492,9 +492,7 @@ class ServiceManagerContext::InProcessServiceManagerContext
     }
   }
 
-  void ShutDownOnServiceManagerThread() {
-    service_manager_.reset();
-  }
+  void ShutDownOnServiceManagerThread() { service_manager_.reset(); }
 
   void StartServicesOnServiceManagerThread(
       std::vector<std::string> service_names) {
@@ -729,7 +727,7 @@ ServiceManagerContext::ServiceManagerContext(
       base::Bind(&StartServiceInGpuProcess,
                  shape_detection::mojom::kServiceName));
 
-  packaged_services_connection_->AddServiceRequestHandlerWithPID(
+  packaged_services_connection_->AddServiceRequestHandlerWithCallback(
       ml::mojom::kServiceName,
       base::Bind(&StartServiceInGpuProcess, ml::mojom::kServiceName));
 

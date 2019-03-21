@@ -15,6 +15,7 @@
 #include "services/device/public/cpp/manifest.h"
 #include "services/media_session/public/cpp/manifest.h"
 #include "services/metrics/public/cpp/manifest.h"
+#include "services/ml/public/cpp/manifest.h"
 #include "services/network/public/cpp/manifest.h"
 #include "services/resource_coordinator/public/cpp/manifest.h"
 #include "services/service_manager/public/cpp/manifest_builder.h"
@@ -57,6 +58,7 @@ const service_manager::Manifest& GetContentPackagedServicesManifest() {
         .PackageService(device::GetManifest())
         .PackageService(media_session::GetManifest())
         .PackageService(metrics::GetManifest())
+        .PackageService(ml::GetManifest())
         .PackageService(network::GetManifest())
         .PackageService(resource_coordinator::GetManifest())
         .PackageService(shape_detection::GetManifest())

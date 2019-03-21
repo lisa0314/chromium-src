@@ -231,13 +231,13 @@ source_set("content_packaged_services_manifest") {
     "//services/device/public/cpp:manifest",
     "//services/media_session/public/cpp:manifest",
     "//services/metrics/public/cpp:manifest",
+    "//services/ml/public/cpp:manifest",
     "//services/network/public/cpp:manifest",
     "//services/resource_coordinator/public/cpp:manifest",
     "//services/shape_detection/public/cpp:manifest",
     "//services/tracing:manifest",
     "//services/video_capture/public/cpp:manifest",
     "//services/viz/public/cpp:manifest",
-    "//services/ml:manifest",
   ]
 
   public_deps = [
