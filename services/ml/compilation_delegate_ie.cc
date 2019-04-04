@@ -173,8 +173,8 @@ int32_t CompilationDelegateIe::GetDims(const std::vector<uint32_t>& dimensions,
   } else if (dimensions.size() == 3) {
     // HWC -> CHW
     dims[0] = dimensions[2];
-    dims[1] = dimensions[1];
-    dims[2] = dimensions[2];
+    dims[1] = dimensions[0];
+    dims[2] = dimensions[1];
   } else if (dimensions.size() == 4) {
     // NHWC -> NCHW
     dims[0] = dimensions[0];
@@ -387,7 +387,8 @@ int32_t CompilationDelegateIe::AddElementwise(
   }
 
   // Binary op
-  std::vector<size_t> input_layer_ids;
+  std::vector<ie::PortInfo> input_port_infos;
+  std::vector<ie::Port> input_ports;
   for (size_t i = 0; i < 2; ++i) {
     const uint32_t input_index = operation->inputs[i];
     if (layer_id_map_.find(input_index) == layer_id_map_.end()) {
@@ -406,7 +407,8 @@ int32_t CompilationDelegateIe::AddElementwise(
       }
     }
     const size_t layer_id = layer_id_map_[input_index];
-    input_layer_ids.push_back(layer_id);
+    input_port_infos.push_back({layer_id});
+    input_ports.push_back(builder_->getLayer(layer_id).getOutputPorts()[0]);
     DLOG(INFO) << "[IE] input " << i << " layer id " << layer_id
                << " operand index " << input_index;
   }
@@ -427,11 +429,9 @@ int32_t CompilationDelegateIe::AddElementwise(
   }
   try {
     size_t layer_id = builder_->addLayer(
-        {{input_layer_ids[0]}, {input_layer_ids[1]}},
+        input_port_infos,
         ie::Builder::EltwiseLayer(name)
-            .setInputPorts(
-                {builder_->getLayer(input_layer_ids[0]).getOutputPorts()[0],
-                 builder_->getLayer(input_layer_ids[1]).getOutputPorts()[0]})
+            .setInputPorts(input_ports)
             .setEltwiseType(type));
     DLOG(INFO) << "[IE] succeed to add eltwise layer id " << layer_id
                << " for output operand index " << output_index << " with type "
@@ -556,7 +556,7 @@ int32_t CompilationDelegateIe::AddPooling(
             .setPoolingType(operation->type == mojom::AVERAGE_POOL_2D
                                 ? ie::Builder::PoolingLayer::PoolingType::AVG
                                 : ie::Builder::PoolingLayer::PoolingType::MAX)
-            .setRoundingType(ie::Builder::PoolingLayer::RoundingType::CEIL));
+            .setRoundingType(ie::Builder::PoolingLayer::RoundingType::FLOOR));
     if (params.fuse_code != mojom::FUSED_NONE) {
       result = AddActivationByFusedCode(params.fuse_code, layer_id, output_name,
                                         layer_id);
@@ -654,8 +654,80 @@ int32_t CompilationDelegateIe::AddConcatenation(
   if (result != mojom::NOT_ERROR)
     return result;
 
-  LOG(ERROR) << "Operation type " << operation->type << " is not supported.";
-  return mojom::BAD_DATA;
+  const mojom::ModelInfoPtr& model = compilation_->GetModel();
+  std::vector<ie::PortInfo> input_port_infos;
+  std::vector<ie::Port> input_ports;
+  for (size_t i = 0; i < operation->inputs.size() - 1; ++i) {
+    const uint32_t input_index = operation->inputs[i];
+    if (layer_id_map_.find(input_index) == layer_id_map_.end()) {
+      // Setup constants
+      const mojom::ModelInfoPtr& model = compilation_->GetModel();
+      if (model->values.find(base::NumberToString(input_index)) !=
+          model->values.end()) {
+        result = AddConstant(input_index);
+        if (result != mojom::NOT_ERROR) {
+          return result;
+        }
+      } else {
+        LOG(ERROR) << "The layer for operand index " << input_index
+                   << " is not ready";
+        return mojom::BAD_DATA;
+      }
+    }
+    const size_t layer_id = layer_id_map_[input_index];
+    input_port_infos.push_back({layer_id});
+    input_ports.push_back(builder_->getLayer(layer_id).getOutputPorts()[0]);
+    DLOG(INFO) << "[IE] input " << i << " layer id " << layer_id
+               << " operand index " << input_index;
+  }
+
+  int axis = 0;
+  const uint32_t rank =
+      model->operands[operation->inputs[0]]->dimensions.size();
+  if (rank == 1 || rank == 2) {
+    axis = params.axis;
+  } else if (rank == 3) {
+    // HWC -> CHW
+    if (params.axis == 0) {
+      axis = 1;
+    } else if (params.axis == 1) {
+      axis = 2;
+    } else if (params.axis == 2) {
+      axis = 0;
+    }
+  } else if (rank == 4) {
+    // NHWC -> NCHW
+    if (params.axis == 0) {
+      axis = 0;
+    } else if (params.axis == 1) {
+      axis = 2;
+    } else if (params.axis == 2) {
+      axis = 3;
+    } else if (params.axis == 3) {
+      axis = 1;
+    }
+  } else {
+    LOG(ERROR) << "rank " << rank << " is not supported.";
+    return mojom::BAD_DATA;
+  }
+
+  const uint32_t output_index = operation->outputs[0];
+  std::string name(base::NumberToString(output_index));
+  try {
+    size_t layer_id = builder_->addLayer(
+        input_port_infos,
+        ie::Builder::ConcatLayer(name)
+            .setInputPorts(input_ports)
+            .setAxis(axis));
+    DLOG(INFO) << "[IE] succeed to add concat layer id " << layer_id
+               << " for output operand index " << output_index << "with axis"
+               << axis;
+    layer_id_map_[output_index] = layer_id;
+  } catch (const std::exception& ex) {
+    LOG(ERROR) << "[IE] failed to add concat layer " << ex.what();
+    return mojom::OP_FAILED;
+  }
+  return mojom::NOT_ERROR;
 }
 
 int32_t CompilationDelegateIe::AddFullyConnected(
@@ -665,9 +737,60 @@ int32_t CompilationDelegateIe::AddFullyConnected(
   int32_t result = compilation_->GetFullyConnectedParams(operation, params);
   if (result != mojom::NOT_ERROR)
     return result;
-
-  LOG(ERROR) << "Operation type " << operation->type << " is not supported.";
-  return mojom::BAD_DATA;
+  const uint32_t input_index = operation->inputs[0];
+  if (layer_id_map_.find(input_index) == layer_id_map_.end()) {
+    LOG(ERROR) << "The layer for operand index " << input_index
+               << " is not ready";
+    return mojom::BAD_DATA;
+  }
+  try {
+    const uint32_t output_index = operation->outputs[0];
+    std::string output_name(base::NumberToString(output_index));
+    std::string name(output_name);
+    if (params.fuse_code != mojom::FUSED_NONE) {
+      name = name + "_pre_fuse";
+    }
+    const uint32_t weights_index = operation->inputs[1];
+    ie::Blob::Ptr weights;
+    result = CreateBlob(weights_index, weights);
+    if (result != mojom::NOT_ERROR) {
+      return result;
+    }
+    const uint32_t bias_index = operation->inputs[2];
+    ie::Blob::Ptr bias;
+    result = CreateBlob(bias_index, bias);
+    if (result != mojom::NOT_ERROR) {
+      return result;
+    }
+    size_t input_layer_id = layer_id_map_[input_index];
+    DLOG(INFO) << "[IE] input port layer id " << input_layer_id
+               << " for operand index " << input_index;
+    std::string reshape_name = name + "-reshape";
+    size_t layer_id = builder_->addLayer(
+        {{input_layer_id}},
+        ie::Builder::ReshapeLayer(reshape_name)
+        .setDims({params.input_batch_size, params.input_size}));
+    layer_id = builder_->addLayer(
+        {{layer_id}},
+        ie::Builder::FullyConnectedLayer(name)
+            .setOutputNum(params.output_num_units)
+            .setWeights(weights)
+            .setBiases(bias));
+    if (params.fuse_code != mojom::FUSED_NONE) {
+      result = AddActivationByFusedCode(params.fuse_code, layer_id, output_name,
+                                        layer_id);
+      if (result != mojom::NOT_ERROR) {
+        return result;
+      }
+    }
+    layer_id_map_[output_index] = layer_id;
+    DLOG(INFO) << "[IE] succeed to add fc layer id " << layer_id
+               << " for output operand index " << output_index;
+  } catch (const std::exception& ex) {
+    LOG(ERROR) << "[IE] failed to add fc layer " << ex.what();
+    return mojom::OP_FAILED;
+  }
+  return mojom::NOT_ERROR;
 }
 
 int32_t CompilationDelegateIe::AddResizeBilinear(
