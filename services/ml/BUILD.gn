@@ -4,6 +4,10 @@
 
 import("//testing/test.gni")
 
+declare_args() {
+  enable_ie_myriad = false
+}
+
 if (is_win) {
   cldnn_dll = "clDNN64.dll"
   mkldnn_dll = "mkldnn.dll"
@@ -210,6 +214,12 @@ source_set("lib") {
       "//third_party/libinference_engine:libMKLDNNPlugin",
       "//third_party/libinference_engine:libclDNNPlugin",
     ]
+
+    if (enable_ie_myriad) {
+      deps += [
+        "//third_party/libinference_engine:libmyriadPlugin",
+      ]
+    }
   }
 }
 
