@@ -106,7 +106,7 @@ HRESULT CreateCommittedResources(scoped_refptr<CompiledModelDML> dml,
     hr = CreateUploadResource(dml->operand_map_[index]->SizeInBytes(),
                               dml->operand_map_[index]->upload_resource_,
                               dml->operand_map_[index]->operand_resource_,
-                              dml->d3D12_device_);
+                              dml->d3d12_device_);
     if (FAILED(hr)) {
       LOG(ERROR) << "Failed creating upload committed resource for inputs.";
       return hr;
@@ -122,7 +122,7 @@ HRESULT CreateCommittedResources(scoped_refptr<CompiledModelDML> dml,
     hr = CreateReadbackResource(dml->operand_map_[index]->SizeInBytes(),
                                 dml->operand_map_[index]->readback_resource_,
                                 dml->operand_map_[index]->operand_resource_,
-                                dml->d3D12_device_);
+                                dml->d3d12_device_);
     if (FAILED(hr)) {
       LOG(ERROR) << "Failed creating readback committed resource for inputs.";
       return hr;
@@ -151,7 +151,7 @@ HRESULT UploadConstantResource(scoped_refptr<CompiledModelDML> dml,
   HRESULT hr = CreateUploadResource(dml->operand_map_[index]->SizeInBytes(),
                                     dml->operand_map_[index]->upload_resource_,
                                     dml->operand_map_[index]->operand_resource_,
-                                    dml->d3D12_device_);
+                                    dml->d3d12_device_);
   if (FAILED(hr)) {
     LOG(ERROR) << "Failed creating committed resource for constants.";
     return hr;
@@ -190,7 +190,7 @@ HRESULT CreateIntermediateResource(scoped_refptr<CompiledModelDML> dml,
 
   HRESULT hr = CreateOutputResource(dml->operand_map_[index]->SizeInBytes(),
                                     dml->operand_map_[index]->operand_resource_,
-                                    dml->d3D12_device_);
+                                    dml->d3d12_device_);
   if (FAILED(hr)) {
     LOG(ERROR) << "Failed creating committed resource for intermediate.";
     return hr;
@@ -227,7 +227,7 @@ HRESULT InitializeOperators(scoped_refptr<CompiledModelDML> dml,
   descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   descriptor_heap_desc.NumDescriptors = descriptor_count;
   descriptor_heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-  hr = dml->d3D12_device_->CreateDescriptorHeap(&descriptor_heap_desc,
+  hr = dml->d3d12_device_->CreateDescriptorHeap(&descriptor_heap_desc,
                                                 IID_PPV_ARGS(&descriptor_heap));
   if (FAILED(hr)) {
     LOG(ERROR) << "Failed creating descriptor heap.";
@@ -240,16 +240,16 @@ HRESULT InitializeOperators(scoped_refptr<CompiledModelDML> dml,
                                          d3D12_descriptor_heaps);
 
   // Create a binding table over the descriptor heap we just created.
-  dml->binding_table_desc_ = {};
-  dml->binding_table_desc_.Dispatchable = operator_initializer.Get();
-  dml->binding_table_desc_.CPUDescriptorHandle =
+  DML_BINDING_TABLE_DESC binding_table_desc = {};
+  binding_table_desc.Dispatchable = operator_initializer.Get();
+  binding_table_desc.CPUDescriptorHandle =
       descriptor_heap->GetCPUDescriptorHandleForHeapStart();
-  dml->binding_table_desc_.GPUDescriptorHandle =
+  binding_table_desc.GPUDescriptorHandle =
       descriptor_heap->GetGPUDescriptorHandleForHeapStart();
-  dml->binding_table_desc_.SizeInDescriptors = descriptor_count;
-
-  hr = dml->dml_device_->CreateBindingTable(&dml->binding_table_desc_,
-                                            IID_PPV_ARGS(&dml->binding_table_));
+  binding_table_desc.SizeInDescriptors = descriptor_count;
+  ComPtr<IDMLBindingTable> binding_table;
+  hr = dml->dml_device_->CreateBindingTable(&binding_table_desc,
+                                            IID_PPV_ARGS(&binding_table));
   if (FAILED(hr)) {
     LOG(ERROR) << "Failed creating binding table.";
     return hr;
@@ -261,7 +261,7 @@ HRESULT InitializeOperators(scoped_refptr<CompiledModelDML> dml,
                execute_temporary_resource_size);
   if (dml->temporary_resource_size_ != 0) {
     hr = CreateCommonResource(dml->temporary_resource_size_,
-                              dml->temporary_buffer_, dml->d3D12_device_);
+                              dml->temporary_buffer_, dml->d3d12_device_);
     if (FAILED(hr)) {
       LOG(ERROR) << "Failed creating committed resource for temorary buffer.";
       return hr;
@@ -281,15 +281,68 @@ HRESULT InitializeOperators(scoped_refptr<CompiledModelDML> dml,
   // Record execution of the operator initializer.
   dml->command_recorder_->RecordDispatch(dml->command_list_.Get(),
                                          operator_initializer.Get(),
-                                         dml->binding_table_.Get());
+                                         binding_table.Get());
 
   // Close the Direct3D 12 command list, and submit it for execution.
-  hr = CloseExecuteResetWait(dml->d3D12_device_, dml->command_queue_,
+  hr = CloseExecuteResetWait(dml->d3d12_device_, dml->command_queue_,
                              dml->command_allocator_, dml->command_list_);
   if (FAILED(hr)) {
     LOG(ERROR) << "Failed executing command list for initializing operators.";
     return hr;
   }
+
+  return S_OK;
+}
+
+HRESULT BindingTableForExecution(IDMLDevice* dml_device,
+                              OperationDML* operation,
+                              CompiledModelDML* dml) {
+  // Create a table per executed operator.
+  auto binding_props = operation->compiled_operator_->GetBindingProperties();
+  DML_BINDING_TABLE_DESC table_desc = {
+      operation->compiled_operator_.Get(),
+      dml->GetCpuHandle(operation->descriptor_index_),
+      dml->GetGpuHandle(operation->descriptor_index_),
+      binding_props.RequiredDescriptorCount};
+  HRESULT hr = dml_device->CreateBindingTable(
+      &table_desc, IID_PPV_ARGS(&operation->binding_table_));
+  if (FAILED(hr)) {
+    LOG(ERROR) << "Failed creating binding table for compiled operator.";
+    return hr;
+  }
+
+  if (binding_props.TemporaryResourceSize != 0) {
+    DML_BUFFER_BINDING buffer_binding = {dml->temporary_buffer_.Get(), 0,
+                                         dml->temporary_resource_size_};
+    DML_BINDING_DESC binding_desc = {DML_BINDING_TYPE_BUFFER, &buffer_binding};
+    operation->binding_table_->BindTemporaryResource(&binding_desc);
+  }
+
+  size_t input_size = operation->bind_inputs_size;
+  DML_BUFFER_BINDING input_buffer_binding[input_size];
+  DML_BINDING_DESC input_binding_array[input_size];
+  DCHECK(input_size != 0);
+  for (size_t i = 0; i < input_size; ++i) {
+    size_t input_index = operation->inputs_[i];
+    UINT64 input_buffer_size = dml->operand_map_[input_index]->SizeInBytes();
+    ComPtr<ID3D12Resource> input_resource =
+        dml->operand_map_[input_index]->operand_resource_;
+    input_buffer_binding[i] = {input_resource.Get(), 0, input_buffer_size};
+    input_binding_array[i] = {DML_BINDING_TYPE_BUFFER,
+                              &input_buffer_binding[i]};
+  }
+  operation->binding_table_->BindInputs(input_size, input_binding_array);
+
+  DCHECK(operation->outputs_.size() == 1);
+  size_t output_index = operation->outputs_[0];
+  UINT64 output_buffer_size = dml->operand_map_[output_index]->SizeInBytes();
+  ComPtr<ID3D12Resource> output_resource =
+      dml->operand_map_[output_index]->operand_resource_;
+  DML_BUFFER_BINDING output_buffer_binding = {output_resource.Get(), 0,
+                                              output_buffer_size};
+  DML_BINDING_DESC output_binding_desc{DML_BINDING_TYPE_BUFFER,
+                                       &output_buffer_binding};
+  operation->binding_table_->BindOutputs(1, &output_binding_desc);
 
   return S_OK;
 }
@@ -305,14 +358,14 @@ CompilationDelegateDML::CompilationDelegateDML(
 
   // Set up Direct3D 12.
   HRESULT hr =
-      InitializeDirect3D12(dml_->d3D12_device_, dml_->command_queue_,
+      InitializeDirect3D12(dml_->d3d12_device_, dml_->command_queue_,
                            dml_->command_allocator_, dml_->command_list_);
   if (FAILED(hr)) {
     LOG(ERROR) << "Failed initializing D3D12.";
     return;
   }
   DLOG(INFO) << "The combination views heap size is "
-             << dml_->d3D12_device_->GetDescriptorHandleIncrementSize(
+             << dml_->d3d12_device_->GetDescriptorHandleIncrementSize(
                     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
   // Create the DirectML device.
   DML_CREATE_DEVICE_FLAGS dml_create_device_flags = DML_CREATE_DEVICE_FLAG_NONE;
@@ -320,7 +373,7 @@ CompilationDelegateDML::CompilationDelegateDML(
   // Enable debugging via DirectML debug layers with this flag.
   dml_create_device_flags |= DML_CREATE_DEVICE_FLAG_DEBUG;
 #endif
-  hr = DML(DMLCreateDevice)(dml_->d3D12_device_.Get(), dml_create_device_flags,
+  hr = DML(DMLCreateDevice)(dml_->d3d12_device_.Get(), dml_create_device_flags,
                             IID_PPV_ARGS(&dml_->dml_device_));
   if (FAILED(hr)) {
     LOG(ERROR) << "Failed creating DirectML.";
@@ -331,7 +384,7 @@ CompilationDelegateDML::CompilationDelegateDML(
 CompilationDelegateDML::~CompilationDelegateDML() = default;
 
 int32_t CompilationDelegateDML::Compile() {
-  if (!dml_->d3D12_device_ || !dml_->dml_device_) {
+  if (!dml_->d3d12_device_ || !dml_->dml_device_) {
     LOG(ERROR) << "Failed enabling DirectML backend";
     return mojom::OP_FAILED;
   }
@@ -349,7 +402,7 @@ int32_t CompilationDelegateDML::Compile() {
     const mojom::OperationPtr& operation = model->operations[i];
     DCHECK(operation->outputs.size() == 1);
 
-    if (operation->type == mojom::ADD) {
+    if (operation->type == mojom::ADD || operation->type == mojom::MUL) {
       hr = CompileArithmetic(model, operation);
     } else if (operation->type == mojom::CONV_2D ||
                operation->type == mojom::DEPTHWISE_CONV_2D) {
@@ -361,6 +414,8 @@ int32_t CompilationDelegateDML::Compile() {
       hr = CompileSoftmax(model, operation);
     } else if (operation->type == mojom::RESHAPE) {
       hr = CompileReshape(model, operation);
+    } else if (operation->type == mojom::CONCATENATION) {
+      hr = CompileConcatenation(model, operation);
     } else {
       LOG(ERROR) << "Operation is not supported";
       hr = E_FAIL;
@@ -377,6 +432,14 @@ int32_t CompilationDelegateDML::Compile() {
   if (FAILED(hr)) {
     LOG(ERROR) << "Failed initializing operators.";
     return mojom::OP_FAILED;
+  }
+
+  for (size_t i = 0; i < dml_->operations_.size(); ++i) {
+    hr = BindingTableForExecution(dml_->dml_device_.Get(),
+                               dml_->operations_[i].get(), dml_.get());
+    if (FAILED(hr)) {
+      LOG(ERROR) << "Failed binding table for execution.";
+    }
   }
 
   return mojom::NOT_ERROR;
@@ -421,15 +484,15 @@ HRESULT CompilationDelegateDML::CompileOperator(
   ComPtr<ID3D12Resource> persistent_buffer = nullptr;
   if (persistent_size != 0) {
     hr = CreateCommonResource(persistent_size, persistent_buffer,
-                              dml_->d3D12_device_);
+                              dml_->d3d12_device_);
     if (FAILED(hr)) {
       LOG(ERROR) << "Failed creating committed resource for persistent.";
       return hr;
     }
   }
   dml_->operations_.push_back(std::make_unique<OperationDML>(
-      compiled_operator, descriptor_count, bind_input_size, inputs, outputs,
-      persistent_buffer, persistent_size));
+      compiled_operator, execute_descriptor_count_, bind_input_size, inputs,
+      outputs, persistent_buffer, persistent_size));
 
   execute_descriptor_count_ += descriptor_count;
   execute_temporary_resource_size_ +=
@@ -483,8 +546,6 @@ HRESULT CompilationDelegateDML::CompileActivation(
 HRESULT CompilationDelegateDML::CompileArithmetic(
     const mojom::ModelInfoPtr& model,
     const mojom::OperationPtr& operation) {
-  // TODO: Support Activation for Add operation in
-  // https://github.com/intel/webml-polyfill/issues/757.
   DLOG(INFO) << "CompilationImplMac::CompileArithmetic";
   // TODO:: Create persistent resources for constants
   // https://github.com/intel/webml-polyfill/issues/758.
@@ -508,14 +569,60 @@ HRESULT CompilationDelegateDML::CompileArithmetic(
     return hr;
   }
 
-  size_t operand_index = operation->inputs[0];
-  DML_BUFFER_TENSOR_DESC buffer_tensor_desc =
-      dml_->operand_map_[operand_index]->operand_desc_;
-  DML_TENSOR_DESC tensor_desc = {DML_TENSOR_TYPE_BUFFER, &buffer_tensor_desc};
+  // Update strides to support broadcasting.
+  size_t primary_index = operation->inputs[0];
+  size_t secondary_index = operation->inputs[1];
+  // Copy new dimensions so that keep original dimensions.
+  std::vector<uint32_t> primary_dimensions =
+      dml_->operand_map_[primary_index]->dimensions_;
+  std::vector<uint32_t> primary_strides =
+      dml_->operand_map_[primary_index]->strides_;
+  std::vector<uint32_t> secondary_dimensions =
+      dml_->operand_map_[secondary_index]->dimensions_;
+  std::vector<uint32_t> secondary_strides =
+      dml_->operand_map_[secondary_index]->strides_;
+  DCHECK(primary_dimensions.size() == 4);
+  for (size_t i = 0; i < 4; ++i) {
+    if (primary_dimensions[i] > secondary_dimensions[i]) {
+      secondary_dimensions[i] = primary_dimensions[i];
+      secondary_strides[i] = 0;
+    } else if (primary_dimensions[i] < secondary_dimensions[i]) {
+      primary_dimensions[i] = secondary_dimensions[i];
+      primary_strides[i] = 0;
+    }
+  }
+
+  DML_BUFFER_TENSOR_DESC primary_buffer_desc =
+      dml_->operand_map_[primary_index]->operand_desc_;
+  primary_buffer_desc.Sizes = primary_dimensions.data();
+  primary_buffer_desc.Strides = primary_strides.data();
+  DML_TENSOR_DESC primary_tensor_desc = {DML_TENSOR_TYPE_BUFFER,
+                                         &primary_buffer_desc};
+
+  DML_BUFFER_TENSOR_DESC secondary_buffer_desc =
+      dml_->operand_map_[secondary_index]->operand_desc_;
+  secondary_buffer_desc.Sizes = secondary_dimensions.data();
+  secondary_buffer_desc.Strides = secondary_strides.data();
+  DML_TENSOR_DESC secondary_tensor_desc = {DML_TENSOR_TYPE_BUFFER,
+                                           &secondary_buffer_desc};
+
+  size_t output_index = operation->outputs[0];
+  DML_BUFFER_TENSOR_DESC output_buffer_desc =
+      dml_->operand_map_[output_index]->operand_desc_;
+  DML_TENSOR_DESC output_tensor_desc = {DML_TENSOR_TYPE_BUFFER,
+                                        &output_buffer_desc};
+
+  DML_OPERATOR_DESC operator_desc;
   DML_ELEMENT_WISE_ADD_OPERATOR_DESC add_operator_desc = {
-      &tensor_desc, &tensor_desc, &tensor_desc};
-  DML_OPERATOR_DESC operator_desc = {DML_OPERATOR_ELEMENT_WISE_ADD,
-                                     &add_operator_desc};
+      &primary_tensor_desc, &secondary_tensor_desc, &output_tensor_desc};
+  DML_ELEMENT_WISE_MULTIPLY_OPERATOR_DESC multiply_operator_desc = {
+      &primary_tensor_desc, &secondary_tensor_desc, &output_tensor_desc};
+  if (operation->type == mojom::ADD) {
+    operator_desc = {DML_OPERATOR_ELEMENT_WISE_ADD, &add_operator_desc};
+  } else if (operation->type == mojom::MUL) {
+    operator_desc = {DML_OPERATOR_ELEMENT_WISE_MULTIPLY,
+                     &multiply_operator_desc};
+  }
 
   hr = CompileOperator(operator_desc, 2, operation->inputs, operation->outputs);
   if (FAILED(hr)) {
@@ -764,6 +871,90 @@ HRESULT CompilationDelegateDML::CompileReshape(
   hr = CompileOperator(operator_desc, 1, operation->inputs, operation->outputs);
   if (FAILED(hr)) {
     LOG(ERROR) << "Failed compiling reshape operator.";
+    return hr;
+  }
+
+  return S_OK;
+}
+
+HRESULT CompilationDelegateDML::CompileConcatenation(
+    const mojom::ModelInfoPtr& model,
+    const mojom::OperationPtr& operation) {
+  DLOG(INFO) << "CompilationImplMac::CompileConcatenation";
+  ConcatParams params;
+  int32_t result = compilation_->GetConcatParams(operation, params);
+  if (result != mojom::NOT_ERROR)
+    return E_FAIL;
+
+  uint32_t axis = 0;
+  // Original rank has convert to 4 for NCHW.
+  switch (model->operands[operation->inputs[0]]->dimensions.size()) {
+    case 1:
+      axis = 3;
+      break;
+    case 2:
+      axis = params.axis + 2;
+      break;
+    case 3:
+      if (params.axis == 2) {
+        axis = 1;
+      } else {
+        axis = params.axis + 2;
+      }
+      break;
+    case 4:
+      if (params.axis == 0) {
+        axis = 0;
+      } else if (params.axis == 1) {
+        axis = 2;
+      } else if (params.axis == 2) {
+        axis = 3;
+      } else {
+        axis = 1;
+      }
+      break;
+    default:
+      LOG(ERROR) << "The rank isn't supported.";
+      return E_FAIL;
+  }
+
+  // Check constants for inputs tensor.
+  HRESULT hr = S_OK;
+  size_t inputs_size = operation->inputs.size() - 1;
+  DML_TENSOR_DESC inputs_tensor_desc[inputs_size];
+  for (size_t i = 0; i < inputs_size; ++i) {
+    size_t input_index = operation->inputs[i];
+    std::string index_id(base::NumberToString(input_index));
+    if (model->values.find(index_id) != model->values.end()) {
+      hr = UploadConstantResource(dml_, model, input_index,
+                                  compilation_->MapMemory(input_index));
+      if (FAILED(hr)) {
+        LOG(ERROR) << "Failed uploading constant resource.";
+        return hr;
+      }
+    }
+    inputs_tensor_desc[i] = {DML_TENSOR_TYPE_BUFFER,
+                             &dml_->operand_map_[input_index]->operand_desc_};
+  }
+  hr = CreateIntermediateResource(dml_, model, operation->outputs[0]);
+  if (FAILED(hr)) {
+    LOG(ERROR) << "Failed creating intermediate resource for output.";
+    return hr;
+  }
+
+  size_t output_index = operation->outputs[0];
+  DML_BUFFER_TENSOR_DESC output_buffer_desc =
+      dml_->operand_map_[output_index]->operand_desc_;
+  DML_TENSOR_DESC output_tensor_desc = {DML_TENSOR_TYPE_BUFFER,
+                                        &output_buffer_desc};
+
+  DML_JOIN_OPERATOR_DESC join_operator_desc = {inputs_size, inputs_tensor_desc,
+                                               &output_tensor_desc, axis};
+  DML_OPERATOR_DESC operator_desc = {DML_OPERATOR_JOIN, &join_operator_desc};
+
+  hr = CompileOperator(operator_desc, 2, operation->inputs, operation->outputs);
+  if (FAILED(hr)) {
+    LOG(ERROR) << "Failed compiling gather operator.";
     return hr;
   }
 

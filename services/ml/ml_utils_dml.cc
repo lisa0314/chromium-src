@@ -13,14 +13,15 @@
 namespace ml {
 
 OperationDML::OperationDML(ComPtr<IDMLCompiledOperator> compiled_operator,
-                           uint32_t descriptor_count,
+                           size_t descriptor_index,
                            int32_t inputs_size,
                            std::vector<uint32_t> inputs,
                            std::vector<uint32_t> outputs,
                            ComPtr<ID3D12Resource> persistent_buffer,
                            uint64_t persistent_size)
-    : compiled_operator_(std::move(compiled_operator)),
-      descriptor_count_(descriptor_count),
+    : descriptor_index_(descriptor_index),
+      binding_table_(nullptr),
+      compiled_operator_(std::move(compiled_operator)),
       persistent_buffer_(std::move(persistent_buffer)),
       persistent_size_(persistent_size),
       bind_inputs_size(inputs_size),
@@ -29,7 +30,7 @@ OperationDML::OperationDML(ComPtr<IDMLCompiledOperator> compiled_operator,
 
 OperationDML::~OperationDML() = default;
 
-OperandDML::OperandDML(std::vector<uint32_t>& dimensions,
+OperandDML::OperandDML(const std::vector<uint32_t>& sizes,
                        bool depth_conv_weight)
     : operand_desc_({}),
       operand_resource_(nullptr),
@@ -37,24 +38,22 @@ OperandDML::OperandDML(std::vector<uint32_t>& dimensions,
       readback_resource_(nullptr) {
   // All buffer tensors must have a DimensionCount of either 4 or 5.
   // input data of NHWC to DirectML NCHW.
-  switch (dimensions.size()) {
+  switch (sizes.size()) {
     case 1:
       // One bias per output channel.
-      dimensions = {1, dimensions[0], 1, 1};
+      dimensions_ = {1, sizes[0], 1, 1};
       break;
     case 2:
-      dimensions = {1, 1, dimensions[0], dimensions[1]};
+      dimensions_ = {1, 1, sizes[0], sizes[1]};
       break;
     case 3:
-      dimensions = {1, dimensions[2], dimensions[0], dimensions[1]};
+      dimensions_ = {1, sizes[2], sizes[0], sizes[1]};
       break;
     case 4:
       if (depth_conv_weight) {
-        dimensions = {dimensions[3], dimensions[0], dimensions[1],
-                      dimensions[2]};
+        dimensions_ = {sizes[3], sizes[0], sizes[1], sizes[2]};
       } else {
-        dimensions = {dimensions[0], dimensions[3], dimensions[1],
-                      dimensions[2]};
+        dimensions_ = {sizes[0], sizes[3], sizes[1], sizes[2]};
       }
       break;
     default: {
@@ -64,23 +63,26 @@ OperandDML::OperandDML(std::vector<uint32_t>& dimensions,
   }
 
   if (depth_conv_weight) {
-    strides_[0] = 1;
-    strides_[1] = dimensions[2] * dimensions[3];  // new_c = 1
-    strides_[2] = dimensions[0] * dimensions[3];  // new_h = depth_out * w
-    strides_[3] = dimensions[0];                  // new_w = depth_out
+    strides_ = {
+        1,
+        dimensions_[2] * dimensions_[3],  // new_c = 1
+        dimensions_[0] * dimensions_[3],  // new_h = depth_out * w
+        dimensions_[0]                    // new_w = depth_out
+    };
   } else {
-    strides_[0] =
-        dimensions[1] * dimensions[2] * dimensions[3];  // new_n = h * w *c
-    strides_[1] = 1;                                    // new_c = 1
-    strides_[2] = dimensions[1] * dimensions[3];        // new_h = w * c
-    strides_[3] = dimensions[1];                        // new_w = c
+    strides_ = {
+        dimensions_[1] * dimensions_[2] * dimensions_[3],  // new_n = h * w *c
+        1,                                                 // new_c = 1
+        dimensions_[1] * dimensions_[3],                   // new_h = w * c
+        dimensions_[1],                                    // new_w = c
+    };
   }
 
   operand_desc_.DataType = DML_TENSOR_DATA_TYPE_FLOAT32;
   operand_desc_.Flags = DML_TENSOR_FLAG_NONE;
-  operand_desc_.DimensionCount = dimensions.size();
-  operand_desc_.Sizes = dimensions.data();
-  operand_desc_.Strides = strides_;
+  operand_desc_.DimensionCount = dimensions_.size();
+  operand_desc_.Sizes = dimensions_.data();
+  operand_desc_.Strides = strides_.data();
   operand_desc_.TotalTensorSizeInBytes = DMLCalcBufferTensorSize(
       operand_desc_.DataType, operand_desc_.DimensionCount, operand_desc_.Sizes,
       operand_desc_.Strides);
@@ -89,6 +91,30 @@ OperandDML::~OperandDML() = default;
 
 CompiledModelDML::CompiledModelDML() = default;
 CompiledModelDML::~CompiledModelDML() = default;
+
+D3D12_GPU_DESCRIPTOR_HANDLE CompiledModelDML::GetGpuHandle(size_t index) const {
+  D3D12_DESCRIPTOR_HEAP_DESC heap_desc = descriptor_heap_->GetDesc();
+  DCHECK(index < heap_desc.NumDescriptors);
+  uint32_t increment_size =
+      d3d12_device_->GetDescriptorHandleIncrementSize(heap_desc.Type);
+  D3D12_GPU_DESCRIPTOR_HANDLE handle;
+  D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle =
+      descriptor_heap_->GetGPUDescriptorHandleForHeapStart();
+  handle.ptr = gpu_handle.ptr + UINT64(index) * UINT64(increment_size);
+  return handle;
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE CompiledModelDML::GetCpuHandle(size_t index) const {
+  D3D12_DESCRIPTOR_HEAP_DESC heap_desc = descriptor_heap_->GetDesc();
+  DCHECK(index < heap_desc.NumDescriptors);
+  uint32_t increment_size =
+      d3d12_device_->GetDescriptorHandleIncrementSize(heap_desc.Type);
+  D3D12_CPU_DESCRIPTOR_HANDLE handle;
+  D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle =
+      descriptor_heap_->GetCPUDescriptorHandleForHeapStart();
+  handle.ptr = cpu_handle.ptr + UINT64(index) * UINT64(increment_size);
+  return handle;
+}
 
 UINT64 DMLCalcBufferTensorSize(DML_TENSOR_DATA_TYPE dataType,
                                UINT dimensionCount,
