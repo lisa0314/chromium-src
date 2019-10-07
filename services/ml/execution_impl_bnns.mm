@@ -289,7 +289,6 @@ void ExecutionImplBnns::StartCompute(StartComputeCallback callback) {
           } else if (operation.local_operation == KAdd ||
                      operation.local_operation == KMul) {
             float* input_a_values = src[0];
-            // LOG(ERROR) <<
             float* input_b_values = src[1];
             const OperandMac& output =
                 compiled_model_->operands_[operation.outputs[0]];

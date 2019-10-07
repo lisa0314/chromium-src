@@ -98,29 +98,30 @@ int32_t CompilationDelegateBnns::Compile() {
   for (size_t i = 0; i < model->operations.size(); ++i) {
     const mojom::OperationPtr& operation = model->operations[i];
 	  OperationMac& operation_mac = compiled_model_->operations_[i];
-          if (operation->type == mojom::ADD || operation->type == mojom::MUL) {
-            success = CompileArithmetic(model, operation, operation_mac);
-          } else if (operation->type == mojom::CONV_2D) {
-            success = CompileConvolution(model, operation, operation_mac);
-          } else if (operation->type == mojom::AVERAGE_POOL_2D ||
-                     operation->type == mojom::MAX_POOL_2D) {
-            success = CompilePooling(model, operation, operation_mac);
-          } else if (operation->type == mojom::SOFTMAX) {
-            success = CompileSoftmax(model, operation, operation_mac);
-          } else if (operation->type == mojom::RESHAPE) {
-            success = CompileReshape(model, operation, operation_mac);
-          } else if (operation->type == mojom::CONCATENATION) {
-            success = CompileConcatenation(model, operation, operation_mac);
-          } else if (operation->type == mojom::FULLY_CONNECTED) {
-            success = CompileFullyConnected(model, operation, operation_mac);
-          } else {
-            LOG(ERROR) << "Operation is not supported";
-            success = false;
-          }
-  }
-  if (!success) {
-    LOG(ERROR) << "Failed compiling model.";
-    return mojom::OP_FAILED;
+    if (operation->type == mojom::ADD || operation->type == mojom::MUL) {
+      success = CompileArithmetic(model, operation, operation_mac);
+    } else if (operation->type == mojom::CONV_2D) {
+      success = CompileConvolution(model, operation, operation_mac);
+    } else if (operation->type == mojom::AVERAGE_POOL_2D ||
+               operation->type == mojom::MAX_POOL_2D) {
+      success = CompilePooling(model, operation, operation_mac);
+    } else if (operation->type == mojom::SOFTMAX) {
+      success = CompileSoftmax(model, operation, operation_mac);
+    } else if (operation->type == mojom::RESHAPE) {
+      success = CompileReshape(model, operation, operation_mac);
+    } else if (operation->type == mojom::CONCATENATION) {
+      success = CompileConcatenation(model, operation, operation_mac);
+    } else if (operation->type == mojom::FULLY_CONNECTED) {
+      success = CompileFullyConnected(model, operation, operation_mac);
+    } else {
+      LOG(ERROR) << "Operation is not supported";
+      success = false;
+    }
+    if (!success) {
+      LOG(ERROR) << "Failed compiling model.";
+      return mojom::OP_FAILED;
+    }
+
   }
 
   return mojom::NOT_ERROR;
@@ -149,6 +150,8 @@ bool CompilationDelegateBnns::CompileConvolution(
     LOG(ERROR) << "depthwise_multiplier is not supported.";
     return false;
   }
+
+  operation_bnns.local_operation = KBNNSFilter;
 
   BNNSActivation activation;
   bzero(&activation, sizeof(activation));
@@ -387,6 +390,7 @@ bool CompilationDelegateBnns::CompilePooling(
     return false;
   }
 
+  operation_bnns.local_operation = KBNNSFilter;
   operation_bnns.offset_x = 0;
   operation_bnns.offset_y = 0;
   operation_bnns.input_batch_size = params.input_batch;
@@ -477,6 +481,7 @@ bool CompilationDelegateBnns::CompileSoftmax(
 	  OperationMac& operation_bnns ) {
   DLOG(INFO) << "CompilationDelegateBnns::CompileSoftmax";
 
+  operation_bnns.local_operation = KBNNSFilter;
   operation_bnns.offset_x = 0;
   operation_bnns.offset_y = 0;
   
