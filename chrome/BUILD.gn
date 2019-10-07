@@ -1005,7 +1005,7 @@ if (is_win) {
   if (is_mac) {
     bundle_data("mkldnn_binaries") {
       sources = [
-        "$root_out_dir/libmkldnn.0.dylib",
+        "$root_out_dir/libmkldnn.0.21.dylib",
       ]
       outputs = [
         "{{bundle_contents_dir}}/Libraries/{{source_file_part}}",
